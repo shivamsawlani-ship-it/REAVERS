@@ -305,16 +305,10 @@ def train_models(
     print("=" * 70 + "\n")
 
     # 8. Save Models and Metadata
-    if is_hcrl:
-        iforest_file = output_models_dir / "isolation_forest_hcrl.joblib"
-        scaler_file = output_models_dir / "scaler_hcrl.joblib"
-        clf_file = output_models_dir / "attack_classifier_hcrl.joblib"
-        meta_file = output_models_dir / "ai_metadata_hcrl.json"
-    else:
-        iforest_file = output_models_dir / "isolation_forest.joblib"
-        scaler_file = output_models_dir / "scaler.joblib"
-        clf_file = output_models_dir / "attack_classifier.joblib"
-        meta_file = output_models_dir / "ai_metadata.json"
+    iforest_file = output_models_dir / "isolation_forest.joblib"
+    scaler_file = output_models_dir / "scaler.joblib"
+    clf_file = output_models_dir / "attack_classifier.joblib"
+    meta_file = output_models_dir / "ai_metadata.json"
 
     joblib.dump(iso_forest, iforest_file)
     joblib.dump(scaler, scaler_file)

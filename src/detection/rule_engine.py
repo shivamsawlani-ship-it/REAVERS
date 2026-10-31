@@ -89,12 +89,25 @@ class CANRuleEngine:
         # Rate tracking deques: updated per frame on evaluate() to monitor live bus rates
         self._rate_deques: Dict[int, Deque[float]] = collections.defaultdict(collections.deque)
 
+        # Incoming frame history for resync tracking: arb_id -> deque of (ts, counter, chk_ok)
+        self._incoming_history: Dict[int, Deque[Tuple[float, int, bool]]] = collections.defaultdict(
+            lambda: collections.deque(maxlen=10)
+        )
+
     def reset(self) -> None:
         """Reset all committed state and rate tracking buffers."""
         self._last_accepted_ts.clear()
         self._last_accepted_counter.clear()
         self._seen_payload_hashes.clear()
         self._rate_deques.clear()
+        self._incoming_history.clear()
+
+    def force_resync(self, arb_id: int) -> None:
+        """Force an immediate baseline reset for a specific CAN ID (lockout watchdog)."""
+        self._last_accepted_ts.pop(arb_id, None)
+        self._last_accepted_counter.pop(arb_id, None)
+        self._incoming_history[arb_id].clear()
+        self._rate_deques[arb_id].clear()
 
     def stream_rate_ratio(self, arb_id: int) -> float:
         """Return the ratio of current observed stream rate to nominal rate."""
@@ -167,7 +180,8 @@ class CANRuleEngine:
         # -------------------------------------------------------------------
         # Rule 3: CHECKSUM
         # -------------------------------------------------------------------
-        if not checksum_ok(data):
+        chk_ok = checksum_ok(data)
+        if not chk_ok:
             expected_chk = data[0] ^ data[1] ^ data[2] ^ data[3] ^ data[4] ^ data[5]
             evidence_list.append(Evidence(
                 source="rule",
@@ -180,12 +194,34 @@ class CANRuleEngine:
                 hint="Fuzzing",
             ))
 
+        # Record incoming history for counter & timing resynchronization
+        curr_counter = counter_of(data)
+        self._incoming_history[arb_id].append((now, curr_counter, chk_ok))
+
+        # RESYNC CHECK (CONTRACT / FIX 1):
+        # Baselines for counter, timing and physics state must not depend only on accepted frames.
+        # If an ID shows a clean run of 3 consecutive frames (counter +1 each, checksum valid,
+        # timing on schedule) it re-baselines the counter.
+        history = self._incoming_history[arb_id]
+        if is_known and len(history) >= 3:
+            h0, h1, h2 = history[-3], history[-2], history[-1]
+            nom_p = DBC[arb_id].period_s
+            c_ok = (h1[1] == (h0[1] + 1) % 16) and (h2[1] == (h1[1] + 1) % 16)
+            k_ok = h0[2] and h1[2] and h2[2]
+            dt1 = h1[0] - h0[0]
+            dt2 = h2[0] - h1[0]
+            t_ok = (0.40 * nom_p <= dt1 <= 2.5 * nom_p) and (0.40 * nom_p <= dt2 <= 2.5 * nom_p)
+
+            if c_ok and k_ok and t_ok:
+                # Re-baseline counter to previous frame in clean streak
+                self._last_accepted_counter[arb_id] = h1[1]
+                self._last_accepted_ts[arb_id] = h1[0]
+
         # -------------------------------------------------------------------
         # Rule 4: COUNTER Freshness versus last ACCEPTED counter
         # -------------------------------------------------------------------
         if is_known and arb_id in self._last_accepted_counter:
             last_counter = self._last_accepted_counter[arb_id]
-            curr_counter = counter_of(data)
             expected_counter = (last_counter + 1) % 16
 
             # Sequential tolerance: accept +1 or +2 (in case of single dropped frame)

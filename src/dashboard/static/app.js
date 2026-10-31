@@ -408,7 +408,10 @@
   // 3. Vehicle Digital Twin Telemetry Cards
   function renderDigitalTwin(snap) {
     const twin = snap.twin || {};
-    const rawTwin = JSON.stringify(twin);
+    const rawTwin = JSON.stringify({
+      twin: twin,
+      starvation: snap.starvation_warning,
+    });
     if (rawTwin === state.lastJson.twin) return;
     state.lastJson.twin = rawTwin;
 
@@ -417,13 +420,18 @@
     dom.twinSpeed.textContent = `${speed} km/h`;
 
     const perceived = twin.perceived || {};
-    const pSpeed = perceived.speed_kmh != null ? perceived.speed_kmh.toFixed(1) : speed;
-    const speedDelta = Math.abs((twin.speed_kmh || 0) - (perceived.speed_kmh || 0));
+    const pSpeed = perceived.speed_kmh;
 
-    if (speedDelta > 5.0) {
-      dom.twinSpeedSub.innerHTML = `<span class="spoofed-speed-alert">SPOOFED SPEED SHOWN: ${pSpeed} km/h</span> (True: ${speed})`;
+    if (pSpeed != null) {
+      const pSpeedStr = pSpeed.toFixed(1);
+      const speedDelta = Math.abs((twin.speed_kmh || 0) - pSpeed);
+      if (speedDelta > 5.0) {
+        dom.twinSpeedSub.innerHTML = `<span class="spoofed-speed-alert">SPOOFED SPEED SHOWN: ${pSpeedStr} km/h</span> (True: ${speed})`;
+      } else {
+        dom.twinSpeedSub.textContent = `Cluster: ${pSpeedStr} km/h (True: ${speed} km/h)`;
+      }
     } else {
-      dom.twinSpeedSub.textContent = `Cluster: ${pSpeed} km/h (True: ${speed} km/h)`;
+      dom.twinSpeedSub.textContent = `Cluster: -- (stale) | True: ${speed} km/h`;
     }
 
     // RPM
@@ -435,8 +443,12 @@
     // Decel / Brake
     const decel = twin.applied_decel != null ? twin.applied_decel.toFixed(1) : "0.0";
     dom.twinDecel.textContent = `${decel} m/s²`;
-    const aebText = twin.aeb ? "AEB ACTIVE" : "Standby";
-    dom.twinBrakeSub.textContent = `Pedal: ${pedal}% | AEB: ${aebText}`;
+    if (snap.starvation_warning) {
+      dom.twinBrakeSub.innerHTML = `<span class="spoofed-speed-alert">FAIL-SAFE STARVATION (>200ms)</span>`;
+    } else {
+      const aebText = twin.aeb ? "AEB ACTIVE" : "Standby";
+      dom.twinBrakeSub.textContent = `Pedal: ${pedal}% | AEB: ${aebText}`;
+    }
 
     // Steering
     const steer = twin.steering_deg != null ? twin.steering_deg.toFixed(1) : "0.0";
@@ -507,16 +519,31 @@
 
     if (typeof Plotly === "undefined") return;
 
-    const scores = snap.scores || [];
+    const rawScores = snap.scores || [];
     const tVals = [];
     const anomVals = [];
     const atkProbVals = [];
 
-    scores.forEach((pt) => {
-      tVals.push(pt.t);
-      anomVals.push(pt.anomaly);
-      atkProbVals.push(pt.attack_prob);
-    });
+    // Downsample to at most 200 points
+    if (rawScores.length > 200) {
+      const step = rawScores.length / 200;
+      for (let i = 0; i < 200; i++) {
+        const pt = rawScores[Math.floor(i * step)];
+        tVals.push(pt.t);
+        anomVals.push(pt.anomaly);
+        atkProbVals.push(pt.attack_prob);
+      }
+    } else {
+      rawScores.forEach((pt) => {
+        tVals.push(pt.t);
+        anomVals.push(pt.anomaly);
+        atkProbVals.push(pt.attack_prob);
+      });
+    }
+
+    const currentT = tVals.length > 0 ? tVals[tVals.length - 1] : 0;
+    const xMin = Math.max(0, currentT - 30);
+    const xMax = Math.max(30, currentT);
 
     const traces = [
       {
@@ -565,19 +592,21 @@
     });
 
     const layout = {
-      height: 150,
-      margin: { t: 10, b: 24, l: 30, r: 10 },
+      height: 220,
+      margin: { t: 8, b: 24, l: 32, r: 8 },
       paper_bgcolor: "transparent",
       plot_bgcolor: "rgba(15, 22, 35, 0.6)",
       showlegend: false,
+      uirevision: "constant",
       xaxis: {
+        range: [xMin, xMax],
         color: "#64748b",
         tickfont: { size: 9, family: "monospace" },
         gridcolor: "#1e293b",
         zerolinecolor: "#1e293b",
       },
       yaxis: {
-        range: [0, 1.05],
+        range: [0, 1.0],
         color: "#64748b",
         tickfont: { size: 9, family: "monospace" },
         gridcolor: "#1e293b",
@@ -587,7 +616,7 @@
       shapes: shapes,
     };
 
-    const config = { displayModeBar: false, responsive: true };
+    const config = { displayModeBar: false, responsive: false };
 
     if (!state.plotlyInitialized) {
       Plotly.newPlot("threatPlotly", traces, layout, config);
@@ -958,10 +987,29 @@
   }
 
   // -------------------------------------------------------------------------
+  // Resize Observer for Plotly (Debounced to 250ms)
+  // -------------------------------------------------------------------------
+  function initChartResizeObserver() {
+    const el = document.getElementById("threatPlotly");
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let resizeTimer = null;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (state.plotlyInitialized && typeof Plotly !== "undefined") {
+          Plotly.Plots.resize(el);
+        }
+      }, 250);
+    });
+    observer.observe(el);
+  }
+
+  // -------------------------------------------------------------------------
   // Application Entry Point
   // -------------------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", () => {
     initControls();
+    initChartResizeObserver();
     connectWebSocket();
   });
 })();

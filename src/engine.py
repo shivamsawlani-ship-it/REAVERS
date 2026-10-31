@@ -287,6 +287,7 @@ class CAVShieldEngine:
         self.v2x_validator = V2XValidator(cfg=self.cfg, trust_store=self.world.trust_store)
         self.risk_engine = RiskEngine(cfg=self.cfg)
         self.failsafe = FailSafeManager(cfg=self.cfg)
+        self.failsafe.resync_callback = self._resync_id
 
         # AI Components
         self.feature_extractor = CANFeatureExtractor(cfg=self.cfg)
@@ -342,6 +343,11 @@ class CAVShieldEngine:
     # -----------------------------------------------------------------------
     # Lifecycle API: start, stop, reset
     # -----------------------------------------------------------------------
+
+    def _resync_id(self, arb_id: int) -> None:
+        """Lockout watchdog callback to force-resync stateful baselines."""
+        self.rule_engine.force_resync(arb_id)
+        self.physics_engine.force_resync(arb_id)
 
     def start(self) -> None:
         """Start all real-time background threads."""
@@ -593,7 +599,7 @@ class CAVShieldEngine:
                         if frame.arb_id in COMMAND_IDS:
                             self.world.twin.accept_command(frame.arb_id, decoded, t)
                         elif frame.arb_id in KNOWN_IDS:
-                            self.world.twin.accept_status(frame.arb_id, decoded)
+                            self.world.twin.accept_status(frame.arb_id, decoded, now=t)
                         verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
                     else:
                         verdict_str = "blocked"
@@ -793,7 +799,7 @@ class CAVShieldEngine:
                                 if frame.arb_id in COMMAND_IDS:
                                     self.world.twin.accept_command(frame.arb_id, decoded, now)
                                 elif frame.arb_id in KNOWN_IDS:
-                                    self.world.twin.accept_status(frame.arb_id, decoded)
+                                    self.world.twin.accept_status(frame.arb_id, decoded, now=now)
 
                             verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
                         else:
@@ -1141,29 +1147,8 @@ class CAVShieldEngine:
             sec_events.sort(key=lambda x: x["raw_ts"], reverse=True)
             sec_events = sec_events[:20]
 
-            # 1. Twin plant state
-            twin_st = self.world.twin.state
-            perceived_st = self.world.twin.perceived
-            twin_dict = {
-                "speed_kmh": round(twin_st.speed_kmh, 2),
-                "rpm": round(twin_st.rpm, 1),
-                "pedal": round(twin_st.pedal, 1),
-                "brake_active": bool(twin_st.brake_active),
-                "decel": round(twin_st.decel, 2),
-                "applied_decel": round(twin_st.applied_decel, 2),
-                "steering_deg": round(twin_st.steering_deg, 1),
-                "gear": int(twin_st.gear),
-                "aeb": bool(twin_st.aeb),
-                "unsafe": str(twin_st.unsafe or ""),
-                "unsafe_seconds": round(self.world.twin.unsafe_seconds, 2),
-                "perceived": {
-                    "speed_kmh": round(perceived_st.get("speed_kmh", 0.0), 2),
-                    "rpm": round(perceived_st.get("rpm", 0.0), 1),
-                    "pedal": round(perceived_st.get("pedal", 0.0), 1),
-                    "steering_deg": round(perceived_st.get("steering_deg", 0.0), 1),
-                    "gear": int(perceived_st.get("gear", 3)),
-                },
-            }
+            # 1. Twin plant state (with FIX 6: stale nulls, fresh spoof check, perceived_age_s)
+            twin_dict = self.world.twin.snapshot(now=now)
 
             # 2. Threat assessment
             latest_dec = self.latest_decision
@@ -1234,4 +1219,5 @@ class CAVShieldEngine:
                 "incidents": incidents_list,
                 "metrics": metrics_dict,
                 "demo": dict(self.demo_state),
+                "starvation_warning": self.failsafe.starvation_warning,
             }

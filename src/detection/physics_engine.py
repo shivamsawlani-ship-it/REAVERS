@@ -9,6 +9,7 @@ IMU acceleration, radar TTC, etc.) for explainability.
 
 from __future__ import annotations
 
+import collections
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,6 +74,11 @@ class PhysicsEngine:
         self.validated_acc_flag: bool = True
         self.validated_lka_flag: bool = True
 
+        # Re-anchor & Consistency tracking (CONTRACT / FIX 1)
+        self.last_update_ts: float = 0.0
+        self.consistent_frame_count: Dict[int, int] = collections.defaultdict(int)
+        self.just_reanchored: Dict[int, bool] = collections.defaultdict(bool)
+
     def reset(self) -> None:
         """Reset internal physical state to baseline cruise conditions."""
         self.validated_speed = 72.0
@@ -94,10 +100,50 @@ class PhysicsEngine:
         self.last_steering_ts = 0.0
         self.last_wheel_ts = 0.0
         self.sensor_snapshot = None
+        self.last_update_ts = 0.0
+        self.consistent_frame_count.clear()
+        self.just_reanchored.clear()
 
     def set_sensor_snapshot(self, snapshot: Optional[SensorSnapshot]) -> None:
         """Receive independent out-of-band perception snapshot from sensors."""
         self.sensor_snapshot = snapshot
+
+    def reanchor_from_sensors(self, now: float, reason: str = "") -> None:
+        """Re-anchor validated physical state from independent sensors (FIX 1)."""
+        sensor_speed = None
+        if self.sensor_snapshot is not None:
+            ws = getattr(self.sensor_snapshot, "wheel_speeds", None)
+            if ws is not None and hasattr(ws, "avg"):
+                sensor_speed = float(ws.avg)
+            elif hasattr(self.sensor_snapshot, "ego_speed_kmh"):
+                sensor_speed = float(self.sensor_snapshot.ego_speed_kmh)
+
+        if sensor_speed is None and self.has_wheel_speed and self.validated_wheel_avg > 0.0:
+            sensor_speed = self.validated_wheel_avg
+
+        if sensor_speed is not None:
+            self.validated_speed = sensor_speed
+            self.validated_rpm = min(7500.0, max(self.rpm_base, self.rpm_base + self.rpm_per_kmh * self.validated_speed))
+            self.last_speed_ts = now
+            self.just_reanchored[0x101] = True
+            self.just_reanchored[0x100] = True
+
+        if self.sensor_snapshot is not None:
+            imu = getattr(self.sensor_snapshot, "imu", None)
+            if imu is not None:
+                self.validated_ax = float(getattr(imu, "ax", self.validated_ax))
+                self.validated_yaw = float(getattr(imu, "yaw", self.validated_yaw))
+
+        self.last_update_ts = now
+        self.just_reanchored[0x103] = True
+
+    def force_resync(self, arb_id: Optional[int] = None) -> None:
+        """Force physics re-anchor from independent sensors (lockout watchdog)."""
+        now = self.last_update_ts if self.last_update_ts > 0 else 0.0
+        self.reanchor_from_sensors(now, reason="force_resync")
+        if arb_id is not None:
+            self.consistent_frame_count[arb_id] = 0
+            self.just_reanchored[arb_id] = True
 
     def check(self, frame: CANFrame, decoded: Dict[str, Any]) -> List[Evidence]:
         """Check frame signals against physics invariants and cross-sensor state.
@@ -119,6 +165,14 @@ class PhysicsEngine:
         evidence_list: List[Evidence] = []
         arb_id = frame.arb_id
         now = frame.timestamp
+
+        # Re-anchor condition (CONTRACT / FIX 1):
+        # Re-anchored from independent sensors when frame stream is internally consistent
+        # for 5 frames or the last update is older than 0.5 s.
+        age = (now - self.last_update_ts) if self.last_update_ts > 0 else 0.0
+        if age > 0.5 or self.consistent_frame_count[arb_id] >= 5:
+            self.reanchor_from_sensors(now, reason=f"age={age:.2f}s, consistent_count={self.consistent_frame_count[arb_id]}")
+            self.consistent_frame_count[arb_id] = 0
 
         # -------------------------------------------------------------------
         # 1. 0x200 BRAKE_COMMAND
@@ -244,10 +298,12 @@ class PhysicsEngine:
                     hint="Spoofing",
                 ))
 
-            # Acceleration rate check
+            # Acceleration rate check: use elapsed time capped at 0.2 s, skip on first frame after re-anchor
             if self.last_speed_ts > 0.0:
-                dt_spd = now - self.last_speed_ts
-                if dt_spd > 0.001:
+                if self.just_reanchored.get(0x101, False):
+                    self.just_reanchored[0x101] = False
+                else:
+                    dt_spd = min(0.2, max(0.001, now - self.last_speed_ts))
                     rate_ms2 = abs(speed_kmh - self.validated_speed) / 3.6 / dt_spd
                     if rate_ms2 > (self.max_decel * 1.5):
                         evidence_list.append(Evidence(
@@ -333,8 +389,10 @@ class PhysicsEngine:
                 ))
 
             if self.last_steering_ts > 0.0:
-                dt_str = now - self.last_steering_ts
-                if dt_str > 0.001:
+                if self.just_reanchored.get(0x103, False):
+                    self.just_reanchored[0x103] = False
+                else:
+                    dt_str = min(0.2, max(0.001, now - self.last_steering_ts))
                     rate_dps = abs(steering_deg - self.validated_steering) / dt_str
                     if rate_dps > (self.steering_rate_dps + 50.0):
                         evidence_list.append(Evidence(
@@ -429,6 +487,8 @@ class PhysicsEngine:
         """Update validated physical state. Call ONLY after forwarding frame."""
         arb_id = frame.arb_id
         now = frame.timestamp
+        self.last_update_ts = now
+        self.consistent_frame_count[arb_id] += 1
 
         if arb_id == 0x101:
             self.validated_speed = float(decoded.get("speed_kmh", self.validated_speed))

@@ -179,6 +179,8 @@ body {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 18px;
+  min-height: 56px;
+  contain: layout;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-card);
@@ -314,8 +316,20 @@ body {
 
 .main-grid {
   display: grid;
-  grid-template-columns: 270px 1fr;
+  grid-template-columns: 270px minmax(0, 1fr);
   gap: 14px;
+}
+
+.main-grid > *,
+.content-col > *,
+.twin-cards-grid > *,
+.threat-panel > *,
+.threat-kpi-row > *,
+.failsafe-panel > *,
+.streams-panel > *,
+.metrics-strip > *,
+.failsafe-stat-grid > * {
+  min-width: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -500,8 +514,9 @@ button.btn-reset:hover {
 
 .twin-cards-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
+  contain: layout;
 }
 
 .twin-card {
@@ -514,6 +529,7 @@ button.btn-reset:hover {
   justify-content: space-between;
   box-shadow: var(--shadow-card);
   min-height: 86px;
+  contain: layout;
 }
 
 .twin-label {
@@ -533,6 +549,9 @@ button.btn-reset:hover {
   font-weight: 700;
   color: #fff;
   margin: 4px 0;
+  height: 24px;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
 }
 
 .twin-sub {
@@ -541,6 +560,9 @@ button.btn-reset:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  height: 16px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
 .twin-card.safety-card.safe {
@@ -578,20 +600,25 @@ button.btn-reset:hover {
    -------------------------------------------------------------------------- */
 
 .threat-panel {
-  display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 12px 14px;
   box-shadow: var(--shadow-card);
+  contain: layout;
 }
 
 .chart-wrapper {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  height: 250px;
+  min-height: 250px;
+  max-height: 250px;
+  contain: layout;
 }
 
 .chart-header {
@@ -626,7 +653,16 @@ button.btn-reset:hover {
 
 #threatPlotly {
   width: 100%;
-  height: 150px;
+  height: 220px;
+  min-height: 220px;
+  max-height: 220px;
+}
+
+.threat-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  contain: layout;
 }
 
 .threat-meta {
@@ -637,8 +673,9 @@ button.btn-reset:hover {
 
 .kpi-row {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  contain: layout;
 }
 
 .kpi-card {
@@ -650,6 +687,7 @@ button.btn-reset:hover {
   flex-direction: column;
   align-items: center;
   text-align: center;
+  contain: layout;
 }
 
 .kpi-title {
@@ -666,6 +704,9 @@ button.btn-reset:hover {
   font-weight: 700;
   color: #fff;
   margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+  height: 20px;
+  line-height: 20px;
 }
 
 .explanation-box {
@@ -675,7 +716,11 @@ button.btn-reset:hover {
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 11px;
-  flex: 1;
+  height: 64px;
+  min-height: 64px;
+  max-height: 64px;
+  overflow-y: auto;
+  contain: layout;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -709,8 +754,9 @@ button.btn-reset:hover {
 
 .failsafe-panel {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 340px minmax(0, 1fr);
   gap: 12px;
+  contain: layout;
 }
 
 .table-panel {
@@ -722,6 +768,7 @@ button.btn-reset:hover {
   flex-direction: column;
   gap: 8px;
   box-shadow: var(--shadow-card);
+  contain: layout;
 }
 
 .table-header-row {
@@ -735,14 +782,17 @@ button.btn-reset:hover {
   max-height: 220px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
+  contain: layout;
 }
 
 table.soc-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-family: var(--font-mono);
   font-size: 11px;
   text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 
 table.soc-table th {
@@ -757,6 +807,9 @@ table.soc-table th {
   top: 0;
   border-bottom: 1px solid var(--border-subtle);
   z-index: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 table.soc-table td {
@@ -764,11 +817,42 @@ table.soc-table td {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   color: var(--text-main);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 table.soc-table tr:hover {
   background: var(--bg-surface);
 }
+
+/* Table Column Proportions for Absolute Layout Stability */
+#incidentsTable th:nth-child(1) { width: 8%; }
+#incidentsTable th:nth-child(2) { width: 12%; }
+#incidentsTable th:nth-child(3) { width: 12%; }
+#incidentsTable th:nth-child(4) { width: 22%; }
+#incidentsTable th:nth-child(5) { width: 14%; }
+#incidentsTable th:nth-child(6) { width: 12%; }
+#incidentsTable th:nth-child(7) { width: 12%; }
+#incidentsTable th:nth-child(8) { width: 8%; }
+
+#canTable th:nth-child(1) { width: 14%; }
+#canTable th:nth-child(2) { width: 16%; }
+#canTable th:nth-child(3) { width: 8%; }
+#canTable th:nth-child(4) { width: 34%; }
+#canTable th:nth-child(5) { width: 14%; }
+#canTable th:nth-child(6) { width: 14%; }
+
+#v2xTable th:nth-child(1) { width: 16%; }
+#v2xTable th:nth-child(2) { width: 22%; }
+#v2xTable th:nth-child(3) { width: 20%; }
+#v2xTable th:nth-child(4) { width: 18%; }
+#v2xTable th:nth-child(5) { width: 24%; }
+
+#securityEventsTable th:nth-child(1) { width: 12%; }
+#securityEventsTable th:nth-child(2) { width: 12%; }
+#securityEventsTable th:nth-child(3) { width: 18%; }
+#securityEventsTable th:nth-child(4) { width: 16%; }
+#securityEventsTable th:nth-child(5) { width: 42%; }
 
 /* Gateway Action Items in FailSafe status */
 .failsafe-stat-grid {
@@ -799,6 +883,7 @@ table.soc-table tr:hover {
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main);
+  font-variant-numeric: tabular-nums;
 }
 
 .actions-list {
@@ -826,12 +911,14 @@ table.soc-table tr:hover {
 
 .streams-panel {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
+  contain: layout;
 }
 
 .security-events-panel {
   display: block;
+  contain: layout;
 }
 
 .stream-filter-group {
@@ -953,8 +1040,9 @@ tr.row-suspicious {
 
 .metrics-strip {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 10px;
+  contain: layout;
 }
 
 .metric-card {
@@ -967,6 +1055,7 @@ tr.row-suspicious {
   justify-content: space-between;
   text-align: center;
   box-shadow: var(--shadow-card);
+  contain: layout;
 }
 
 .metric-card-title {
@@ -983,12 +1072,16 @@ tr.row-suspicious {
   font-weight: 800;
   color: #fff;
   margin: 3px 0;
+  height: 22px;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-card-sub {
   font-size: 9px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .export-link {

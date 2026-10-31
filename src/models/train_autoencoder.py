@@ -475,6 +475,9 @@ def train_autoencoder(
     meta_json_path = output_models_dir / ("ae_metadata_hcrl.json" if is_hcrl else "ae_metadata.json")
 
     torch.save(model.state_dict(), model_pt_path)
+    if is_hcrl:
+        # Also mirror to default model path for system integration
+        torch.save(model.state_dict(), output_models_dir / "anomaly_ae.pt")
 
     ae_meta = {
         "dataset": "REAL_HCRL (Hyundai YF Sonata)" if is_hcrl else "SYNTHETIC_SIMULATOR",
@@ -500,6 +503,10 @@ def train_autoencoder(
     }
     with open(meta_json_path, "w", encoding="utf-8") as f:
         json.dump(ae_meta, f, indent=2)
+
+    if is_hcrl:
+        with open(output_models_dir / "ae_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(ae_meta, f, indent=2)
 
     # Save metrics JSON
     metrics_file = output_models_dir.parent / "metrics" / ("ae_metrics_hcrl.json" if is_hcrl else "ae_metrics.json")

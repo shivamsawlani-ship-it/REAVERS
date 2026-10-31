@@ -194,6 +194,32 @@ class RiskEngine:
             if level > RiskLevel.LOW:
                 level = RiskLevel.LOW
 
+        # Evidence Rule (CONTRACT / FIX 2):
+        # A frame is blocked (HIGH or CRITICAL) only if it has:
+        # (a) physics or range inconsistency with sensors that are not under attack, OR
+        # (b) at least two independent protocol failures (for example checksum failure
+        #     plus unknown ID, or counter failure plus a payload already seen = replay), OR
+        # (c) checksum or payload corruption, OR
+        # (d) AI attack detection corroborating protocol anomaly.
+        # Counter-only or timing-only evidence without independent corroboration is strictly MEDIUM: forward the frame and log it.
+        has_physics_inconsistency = any(e.source == "physics" for e in active_evidences)
+        is_replay = any(e.hint == "Replay" for e in active_evidences)
+        protocol_failures = {e.name for e in active_evidences if e.source == "rule"}
+        ai_attack = (ai_fresh and ai_ctx is not None and ai_ctx.available and ai_ctx.attack_prob >= self.critical_ai_conf and ai_ctx.label != "Normal")
+
+        # Capped at MEDIUM only if evidence is purely counter-only or timing-only
+        is_counter_or_timing_only = (
+            protocol_failures.issubset({"COUNTER", "TIMING"})
+            and not is_replay
+            and not has_physics_inconsistency
+            and not ai_attack
+        )
+
+        if is_counter_or_timing_only:
+            if level > RiskLevel.MEDIUM:
+                level = RiskLevel.MEDIUM
+                score = min(score, self.th_high - 0.01)
+
         # 7. Attack-Type Attribution
         attack_type = self._attribute_attack_type(active_evidences, ai_ctx, ai_fresh, level)
 

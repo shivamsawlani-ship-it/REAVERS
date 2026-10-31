@@ -143,25 +143,26 @@
             <div id="threatPlotly"></div>
           </div>
 
-          <div class="threat-meta">
-            <div class="kpi-row">
-              <div class="kpi-card">
-                <div class="kpi-title">Attack Type</div>
-                <div class="kpi-val" id="kpiAttackType">Normal</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-title">Confidence</div>
-                <div class="kpi-val" id="kpiConfidence">0.0%</div>
-              </div>
-              <div class="kpi-card">
-                <div class="kpi-title">Risk Level</div>
-                <div class="kpi-val" id="kpiRiskLevel">LOW</div>
-              </div>
+          <!-- 3 Threat KPI Cards in their own row below the chart (Part B Fix 2) -->
+          <div class="threat-kpi-row">
+            <div class="kpi-card">
+              <div class="kpi-title">Attack Type</div>
+              <div class="kpi-val" id="kpiAttackType">Normal</div>
             </div>
-            <div class="explanation-box" id="explanationBox">
-              <div class="explanation-title" id="explanationTitle">All clear: no inconsistencies found</div>
-              <div class="explanation-body" id="explanationBody">All signals, counters, and physical telemetry conform to verified vehicle dynamics and DBC specifications.</div>
+            <div class="kpi-card">
+              <div class="kpi-title">Confidence</div>
+              <div class="kpi-val" id="kpiConfidence">0.0%</div>
             </div>
+            <div class="kpi-card">
+              <div class="kpi-title">Risk Level</div>
+              <div class="kpi-val" id="kpiRiskLevel">LOW</div>
+            </div>
+          </div>
+
+          <!-- Explanation box with fixed height & overflow-y: auto -->
+          <div class="explanation-box" id="explanationBox">
+            <div class="explanation-title" id="explanationTitle">All clear: no inconsistencies found</div>
+            <div class="explanation-body" id="explanationBody">All signals, counters, and physical telemetry conform to verified vehicle dynamics and DBC specifications.</div>
           </div>
         </section>
 

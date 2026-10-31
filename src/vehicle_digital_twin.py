@@ -161,6 +161,8 @@ class VehicleDigitalTwin:
         self.unsafe_seconds: float = 0.0
         self.state: VehicleState = VehicleState()
         self.perceived: Dict[str, Any] = {}
+        self._signal_timestamps: Dict[str, float] = {}
+        self._last_sim_time: float = 0.0
 
         self.reset()
 
@@ -170,6 +172,7 @@ class VehicleDigitalTwin:
         self.unsafe_seconds = 0.0
         self._accepted_brake_commands.clear()
         self._v2x_hazard_until = 0.0
+        self._last_sim_time = 0.0
 
         initial_speed = self.cruise_kmh
         initial_rpm = min(7500.0, max(self.rpm_base, self.rpm_base + self.rpm_per_kmh * initial_speed))
@@ -177,6 +180,20 @@ class VehicleDigitalTwin:
         initial_drag = 0.05 + 0.0005 * (v_ms ** 2)
 
         self._last_accel_command = (0.0, initial_drag, 2)
+        self.perceived = {
+            "speed_kmh": initial_speed,
+            "rpm": initial_rpm,
+            "pedal": 0.0,
+            "steering_deg": 0.0,
+            "gear": 3,
+        }
+        self._signal_timestamps = {
+            "speed_kmh": 0.0,
+            "rpm": 0.0,
+            "pedal": 0.0,
+            "steering_deg": 0.0,
+            "gear": 0.0,
+        }
 
         self.perceived = {
             "speed_kmh": initial_speed,
@@ -254,18 +271,24 @@ class VehicleDigitalTwin:
             if "aeb" in signals:
                 self.state.aeb = bool(signals["aeb"])
 
-    def accept_status(self, arb_id: int, signals: Dict[str, Any]) -> None:
+    def accept_status(self, arb_id: int, signals: Dict[str, Any], now: Optional[float] = None) -> None:
         """Update perceived state from accepted status messages (instrument cluster belief)."""
+        ts = now if now is not None else self._last_sim_time
         if arb_id == 0x100 and "rpm" in signals:
             self.perceived["rpm"] = float(signals["rpm"])
+            self._signal_timestamps["rpm"] = ts
         elif arb_id == 0x101 and "speed_kmh" in signals:
             self.perceived["speed_kmh"] = float(signals["speed_kmh"])
+            self._signal_timestamps["speed_kmh"] = ts
         elif arb_id == 0x102 and "pedal" in signals:
             self.perceived["pedal"] = float(signals["pedal"])
+            self._signal_timestamps["pedal"] = ts
         elif arb_id == 0x103 and "steering_deg" in signals:
             self.perceived["steering_deg"] = float(signals["steering_deg"])
+            self._signal_timestamps["steering_deg"] = ts
         elif arb_id == 0x104 and "gear" in signals:
             self.perceived["gear"] = int(signals["gear"])
+            self._signal_timestamps["gear"] = ts
 
     def step(self, dt: float, now: float, sensor_snapshot: Optional[Any] = None) -> VehicleState:
         """Step vehicle dynamics, legitimate controllers, and safety bookkeeping.
@@ -284,6 +307,7 @@ class VehicleDigitalTwin:
         VehicleState
             Updated vehicle telemetry state.
         """
+        self._last_sim_time = now
         # 1. Legitimate Driver Pedal Schedule:
         # First at 6 s then every 35 s with peak 22 percent.
         driver_pedal = 0.0
@@ -423,11 +447,19 @@ class VehicleDigitalTwin:
         # 11. Safety Bookkeeping:
         # Unsafe text when applied decel exceeds legitimate by > 2 m/s² (UNINTENDED BRAKING)
         # or accel exceeds by > 1.5, plus cumulative unsafe_seconds.
+        # FIX 6: 'SPOOFED SPEED SHOWN' warning must only appear when a FRESH accepted speed frame differs by > 5 km/h
+        speed_age = now - self._signal_timestamps.get("speed_kmh", -999.0)
+        is_speed_fresh = (speed_age <= 1.0) and (self.perceived.get("speed_kmh") is not None)
+        spoofed_speed_active = is_speed_fresh and (abs(self.perceived["speed_kmh"] - self.state.speed_kmh) > 5.0)
+
         if self.state.applied_decel > (legit_decel + 2.0):
             self.state.unsafe = "UNINTENDED BRAKING"
             self.unsafe_seconds += dt
         elif self.state.applied_accel > (legit_accel + 1.5):
             self.state.unsafe = "UNINTENDED ACCELERATION"
+            self.unsafe_seconds += dt
+        elif spoofed_speed_active:
+            self.state.unsafe = "SPOOFED SPEED SHOWN"
             self.unsafe_seconds += dt
         else:
             self.state.unsafe = ""
@@ -437,8 +469,33 @@ class VehicleDigitalTwin:
 
         return self.state
 
-    def snapshot(self) -> Dict[str, Any]:
-        """Return JSON-serialisable dict matching CONTRACT item 56."""
+    def snapshot(self, now: Optional[float] = None) -> Dict[str, Any]:
+        """Return JSON-serialisable dict matching CONTRACT item 56 and FIX 6."""
+        curr = now if now is not None else self._last_sim_time
+        perceived_out: Dict[str, Any] = {}
+        perceived_age_s: Dict[str, Optional[float]] = {}
+
+        for k in ["speed_kmh", "rpm", "pedal", "steering_deg", "gear"]:
+            ts = self._signal_timestamps.get(k)
+            age = round(curr - ts, 3) if ts is not None and ts > 0 else (0.0 if curr == 0 else 999.0)
+            perceived_age_s[k] = age if age < 900.0 else None
+
+            # Show value as stale (use null / None, not 0) when no accepted frame arrived in 1 s
+            if age <= 1.0 and k in self.perceived:
+                val = self.perceived[k]
+                if k in ("speed_kmh", "steering_deg"):
+                    perceived_out[k] = round(val, 2)
+                elif k == "rpm":
+                    perceived_out[k] = round(val, 1)
+                elif k == "pedal":
+                    perceived_out[k] = round(val, 1)
+                elif k == "gear":
+                    perceived_out[k] = int(val)
+                else:
+                    perceived_out[k] = val
+            else:
+                perceived_out[k] = None
+
         return {
             "speed_kmh": round(self.state.speed_kmh, 2),
             "rpm": round(self.state.rpm, 1),
@@ -451,12 +508,7 @@ class VehicleDigitalTwin:
             "aeb": bool(self.state.aeb),
             "unsafe": self.state.unsafe,
             "unsafe_seconds": round(self.unsafe_seconds, 2),
-            "perceived": {
-                "speed_kmh": round(self.perceived.get("speed_kmh", 0.0), 2),
-                "rpm": round(self.perceived.get("rpm", 0.0), 1),
-                "pedal": round(self.perceived.get("pedal", 0.0), 1),
-                "steering_deg": round(self.perceived.get("steering_deg", 0.0), 2),
-                "gear": int(self.perceived.get("gear", 3)),
-            },
+            "perceived": perceived_out,
+            "perceived_age_s": perceived_age_s,
         }
 

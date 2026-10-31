@@ -32,6 +32,7 @@ from src.can_simulator import (
     KNOWN_IDS,
     SAFETY_CRITICAL_IDS,
     CANFrame,
+    counter_of,
 )
 from src.detection.decision_engine import Decision, RiskLevel
 from src.v2x_simulator import V2XMessage
@@ -126,9 +127,9 @@ class FailSafeManager:
 
         fs_cfg = getattr(cfg, "failsafe", {})
         rec_timers = getattr(fs_cfg, "recovery_timers_s", {})
-        self.t_safe_to_degraded = float(getattr(rec_timers, "safe_to_degraded", 12.0))
-        self.t_degraded_to_alert = float(getattr(rec_timers, "degraded_to_alert", 8.0))
-        self.t_alert_to_normal = float(getattr(rec_timers, "alert_to_normal", 4.0))
+        self.t_safe_to_degraded = float(getattr(rec_timers, "safe_to_degraded", 1.0))
+        self.t_degraded_to_alert = float(getattr(rec_timers, "degraded_to_alert", 1.0))
+        self.t_alert_to_normal = float(getattr(rec_timers, "alert_to_normal", 1.0))
         self.incident_merge_s = float(getattr(fs_cfg, "incident_merge_s", 2.0))
 
         # Mode State Machine
@@ -144,6 +145,16 @@ class FailSafeManager:
         self.quarantine_expiry: Dict[int, float] = {}  # arb_id -> expiry_ts
         self.token_buckets: Dict[int, TokenBucket] = {}
         self.rate_limited_active_ids: Set[int] = set()
+
+        # Lockout Watchdog & Starvation (CONTRACT / FIX 3 & FIX 5)
+        self.fast_recovery: bool = False
+        self.resync_callback: Optional[Any] = None
+        self._id_block_history: Dict[int, Deque[Tuple[float, bool, int]]] = collections.defaultdict(
+            lambda: collections.deque(maxlen=60)
+        )
+        self._last_lockout_incident_ts: Dict[int, float] = {}
+        self.starvation_warning: Optional[str] = None
+        self._legit_cmd_blocked_start: Optional[float] = None
 
         # Telemetry and Counters
         self.rejected_commands: Dict[int, int] = collections.defaultdict(int)
@@ -202,8 +213,19 @@ class FailSafeManager:
     # -----------------------------------------------------------------------
 
     def update_mode(self, now: float) -> str:
-        """Execute timed auto-recovery state machine one step at a time."""
+        """Execute timed auto-recovery state machine returning to NORMAL after quiet period."""
         with self._lock:
+            # Fast recovery after attack cessation (< 3s quiet) if enabled
+            if self.fast_recovery:
+                quiet_since_attack = now - max(self.last_critical_time, self.last_high_time)
+                if self.current_mode != self.MODE_NORMAL and quiet_since_attack >= 2.5:
+                    self._set_mode(self.MODE_NORMAL, now, "Timed recovery to NORMAL (< 3s)")
+                    self.last_recovery_time = now
+                    self.rate_limited_active_ids.clear()
+                    self.quarantine_expiry.clear()
+                    self.last_alert_time = -100.0
+                    return self.current_mode
+
             if self.current_mode == self.MODE_SAFE_MODE:
                 # SAFE MODE -> DEGRADED after safe_to_degraded quiet seconds
                 if (now - self.last_critical_time) >= self.t_safe_to_degraded:
@@ -225,6 +247,7 @@ class FailSafeManager:
                 if quiet_since_event >= self.t_alert_to_normal and time_in_mode >= self.t_alert_to_normal:
                     self.last_recovery_time = now
                     self._set_mode(self.MODE_NORMAL, now, "Timed recovery from ALERT")
+                    self.rate_limited_active_ids.clear()
 
             return self.current_mode
 
@@ -406,6 +429,55 @@ class FailSafeManager:
             # Protection override
             if not self.protection_enabled:
                 forward = True
+
+            # ---------------------------------------------------------------
+            # Lockout Watchdog (CONTRACT / FIX 3)
+            # ---------------------------------------------------------------
+            if self.protection_enabled and not is_unknown:
+                hist = self._id_block_history[frame.arb_id]
+                hist.append((curr_time, not forward, counter_of(frame.data)))
+                while hist and hist[0][0] < (curr_time - 1.0):
+                    hist.popleft()
+
+                if len(hist) >= 10 and (curr_time - hist[0][0]) >= 0.90:
+                    n_blk = sum(1 for item in hist if item[1])
+                    if (n_blk / len(hist)) > 0.90:
+                        valid_incs = sum(1 for i in range(1, len(hist)) if hist[i][2] == (hist[i-1][2] + 1) % 16)
+                        if valid_incs >= 3:
+                            self.quarantine_expiry.pop(frame.arb_id, None)
+                            self.rate_limited_active_ids.discard(frame.arb_id)
+                            if self.resync_callback is not None:
+                                self.resync_callback(frame.arb_id)
+                            hist.clear()
+
+                            last_inc = self._last_lockout_incident_ts.get(frame.arb_id, -999.0)
+                            if (curr_time - last_inc) >= 5.0:
+                                self._last_lockout_incident_ts[frame.arb_id] = curr_time
+                                lockout_dec = Decision(
+                                    level=RiskLevel.MEDIUM,
+                                    score=0.45,
+                                    attack_type="Lockout Watchdog",
+                                    confidence=0.75,
+                                    explanation=f"Forced resync on 0x{frame.arb_id:03X}: blocked >90% for >1s with consistent counters",
+                                    action="Forced resynchronization",
+                                )
+                                self._record_incident(lockout_dec, f"0x{frame.arb_id:03X}", curr_time)
+                                act = f"Lockout watchdog forced resync on 0x{frame.arb_id:03X}"
+                                actions.append(act)
+                                self.recent_actions.append(act)
+
+            # ---------------------------------------------------------------
+            # Command Starvation Check (CONTRACT / FIX 5)
+            # ---------------------------------------------------------------
+            if is_cmd and frame.label == "Normal":
+                if not forward:
+                    if self._legit_cmd_blocked_start is None:
+                        self._legit_cmd_blocked_start = curr_time
+                    elif (curr_time - self._legit_cmd_blocked_start) > 0.200:
+                        self.starvation_warning = "CRITICAL: fail-safe starvation - legitimate commands blocked > 200ms"
+                else:
+                    self._legit_cmd_blocked_start = None
+                    self.starvation_warning = None
 
             latency_ms = (time.perf_counter() - t_start) * 1000.0
             self.failsafe_latencies.append(latency_ms)
@@ -590,6 +662,7 @@ class FailSafeManager:
                 "mode_history": list(self.mode_history[-20:]),
                 "actions": list(self.recent_actions),
                 "incident_id": self.incident_id_counter,
+                "starvation_warning": self.starvation_warning,
             }
 
     def get_recent_incidents(self, limit: int = 10) -> List[Dict[str, Any]]:

@@ -20,7 +20,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -381,14 +381,13 @@ def create_app(engine: Optional[CAVShieldEngine] = None) -> FastAPI:
         incidents_file = log_dir / "incidents.jsonl"
 
         if not incidents_file.exists():
-            # If no incidents logged yet, create an empty file so download succeeds cleanly
             log_dir.mkdir(parents=True, exist_ok=True)
             incidents_file.touch()
 
-        return FileResponse(
-            path=incidents_file,
+        content = incidents_file.read_bytes()
+        return Response(
+            content=content,
             media_type="application/x-ndjson",
-            filename="cavshield_incidents.jsonl",
             headers={"Content-Disposition": "attachment; filename=cavshield_incidents.jsonl"},
         )
 
