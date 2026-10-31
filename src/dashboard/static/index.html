@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CAVShield Cyber-Physical Security Console</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <!-- Offline Plotly bundle served directly by FastAPI without CDN or internet dependency -->
+  <script src="/static/plotly.min.js"></script>
+</head>
+<body>
+  <div class="app-wrapper">
+    <!-- Top Header -->
+    <header class="top-header">
+      <div class="header-brand">
+        <div class="brand-shield" aria-hidden="true">&#9670;</div>
+        <div>
+          <span class="brand-title">CAVShield</span>
+          <span class="brand-subtitle">SOC Real-Time Gateway Console</span>
+        </div>
+      </div>
+      <div class="header-chips">
+        <span class="chip" id="chipBus" title="Active CAN Bus Layer">Bus: Virtual CAN</span>
+        <span class="chip" id="chipAi" title="Active Machine Learning Models">AI: IsolationForest + LightGBM</span>
+        <span class="chip" id="chipSim">Simulator-Only Metrics</span>
+        <span class="chip chip-conn live" id="chipConn">
+          <span class="chip-dot" aria-hidden="true"></span>
+          <span id="connStatusText">Live (WS)</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Operational Mode & Threat Status Banner -->
+    <section class="mode-banner mode-normal" id="modeBanner" role="region" aria-label="Vehicle Security Status">
+      <div class="banner-left">
+        <span class="mode-pill" id="modePill">NORMAL</span>
+        <div>
+          <div class="banner-headline" id="bannerHeadline" aria-live="polite">All systems operational within normal parameters.</div>
+          <div class="banner-action" id="bannerAction">Recommended Driver Action: System operating normally.</div>
+        </div>
+      </div>
+      <div class="banner-right">
+        <span class="prot-badge on" id="protBadge">Protection: ON (Enforcing)</span>
+      </div>
+    </section>
+
+    <!-- Guided Demo Caption Callout Bar -->
+    <div class="demo-caption-bar" id="demoCaptionBar" role="status" aria-live="polite">
+      <div class="demo-pulse-indicator" aria-hidden="true"></div>
+      <div id="demoCaptionText">Guided Demonstration Active</div>
+    </div>
+
+    <!-- Main Grid Layout -->
+    <main class="main-grid">
+      <!-- Left Column: Adversary & Scenario Controls -->
+      <aside class="controls-col" aria-label="Security Controls">
+        <div class="panel-card">
+          <div class="panel-title">
+            <span>Adversary Controls</span>
+            <span class="panel-title-badge" id="activeAttackCount">0 Active</span>
+          </div>
+
+          <div class="btn-label-group">CAN Protocol Attacks</div>
+          <div class="btn-group" id="attackBtnGroup">
+            <!-- Dynamically populated from JS ATTACKS array -->
+          </div>
+
+          <div class="btn-label-group">Legitimate Scenario</div>
+          <div class="btn-group">
+            <button class="btn-soc btn-legit" id="btnRealObstacle">
+              <span>&#9888; Real obstacle ahead</span>
+              <span style="font-size: 10px; opacity: 0.8;">(Legit AEB)</span>
+            </button>
+          </div>
+
+          <div class="btn-label-group">Gateway Enforcement</div>
+          <div class="btn-group">
+            <button class="btn-soc btn-switch on" id="btnProtectionToggle" role="switch" aria-checked="true">
+              <span>Fail-Safe Enforcement</span>
+              <span id="btnProtectionStatusText">ON</span>
+            </button>
+          </div>
+
+          <div class="btn-label-group">System & Scenarios</div>
+          <div class="btn-group">
+            <button class="btn-soc btn-demo" id="btnGuidedDemo">
+              <span>&#9658; Run Guided Demo (60s)</span>
+            </button>
+            <button class="btn-soc btn-reset" id="btnResetSystem">
+              <span>&#8634; Reset System & Telemetry</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right Column: Digital Twin, Threat Monitoring, Streams & Metrics -->
+      <div class="content-col">
+        <!-- 1. Vehicle Digital Twin Cards (6 Cards) -->
+        <section class="twin-cards-grid" aria-label="Vehicle Digital Twin Telemetry">
+          <div class="twin-card" id="cardSpeed">
+            <div class="twin-label">Vehicle Speed</div>
+            <div class="twin-value" id="twinSpeed">72.0 km/h</div>
+            <div class="twin-sub" id="twinSpeedSub">Cluster: 72.0 km/h (True: 72.0)</div>
+          </div>
+          <div class="twin-card" id="cardRpm">
+            <div class="twin-label">Engine RPM</div>
+            <div class="twin-value" id="twinRpm">2766 RPM</div>
+            <div class="twin-sub" id="twinRpmSub">Cruise load steady</div>
+          </div>
+          <div class="twin-card" id="cardBrake">
+            <div class="twin-label">Decel / Brake</div>
+            <div class="twin-value" id="twinDecel">0.0 m/s²</div>
+            <div class="twin-sub" id="twinBrakeSub">Pedal: 0% | AEB: Standby</div>
+          </div>
+          <div class="twin-card" id="cardSteering">
+            <div class="twin-label">Steering Angle</div>
+            <div class="twin-value" id="twinSteering">0.0°</div>
+            <div class="twin-sub" id="twinSteeringSub">Lane Centering (LKA)</div>
+          </div>
+          <div class="twin-card" id="cardGear">
+            <div class="twin-label">Transmission</div>
+            <div class="twin-value" id="twinGear">D</div>
+            <div class="twin-sub" id="twinGearSub">Drive (Gear 3)</div>
+          </div>
+          <div class="twin-card safety-card safe" id="twinSafetyCard">
+            <div class="twin-label">Vehicle Safety</div>
+            <div class="twin-value" id="twinSafetyVal">SAFE</div>
+            <div class="twin-sub" id="twinSafetySub">0.0s unintended condition</div>
+          </div>
+        </section>
+
+        <!-- 2. Threat Monitoring & AI Fusion -->
+        <section class="threat-panel" aria-label="Threat Monitoring">
+          <div class="chart-wrapper">
+            <div class="chart-header">
+              <span>Real-Time Anomaly & Attack Scoring (Streaming)</span>
+              <div class="chart-legend">
+                <span class="leg-item"><span class="leg-color" style="background: var(--col-cyan);"></span> Anomaly</span>
+                <span class="leg-item"><span class="leg-color" style="background: var(--col-alert);"></span> Attack Prob</span>
+                <span class="leg-item"><span class="leg-color" style="background: var(--col-safemode);"></span> Threshold</span>
+              </div>
+            </div>
+            <div id="threatPlotly"></div>
+          </div>
+
+          <div class="threat-meta">
+            <div class="kpi-row">
+              <div class="kpi-card">
+                <div class="kpi-title">Attack Type</div>
+                <div class="kpi-val" id="kpiAttackType">Normal</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-title">Confidence</div>
+                <div class="kpi-val" id="kpiConfidence">0.0%</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-title">Risk Level</div>
+                <div class="kpi-val" id="kpiRiskLevel">LOW</div>
+              </div>
+            </div>
+            <div class="explanation-box" id="explanationBox">
+              <div class="explanation-title" id="explanationTitle">All clear: no inconsistencies found</div>
+              <div class="explanation-body" id="explanationBody">All signals, counters, and physical telemetry conform to verified vehicle dynamics and DBC specifications.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. Fail-Safe Panel & Incident Forensic Log -->
+        <section class="failsafe-panel" aria-label="Fail-Safe & Forensic Audit">
+          <!-- Gateway Status -->
+          <div class="table-panel">
+            <div class="panel-title">
+              <span>Gateway Enforcement</span>
+              <span class="panel-title-badge" id="failsafeIncidentCount">Incidents: 0</span>
+            </div>
+            <div class="failsafe-stat-grid">
+              <div class="stat-chip-card">
+                <span class="stat-chip-label">Blocked Commands</span>
+                <span class="stat-chip-value" id="statRejectedCommands">None</span>
+              </div>
+              <div class="stat-chip-card">
+                <span class="stat-chip-label">Rate-Limited</span>
+                <span class="stat-chip-value" id="statRateLimited">None</span>
+              </div>
+              <div class="stat-chip-card">
+                <span class="stat-chip-label">Quarantined IDs</span>
+                <span class="stat-chip-value" id="statQuarantined">None</span>
+              </div>
+              <div class="stat-chip-card">
+                <span class="stat-chip-label">Rejected V2X</span>
+                <span class="stat-chip-value" id="statRejectedV2x">0</span>
+              </div>
+            </div>
+            <div class="panel-title" style="margin-top: 4px;">Recent Gateway Actions</div>
+            <div class="actions-list" id="actionsList">
+              <div class="action-item">System initialized in NORMAL mode.</div>
+            </div>
+          </div>
+
+          <!-- Forensic Incidents Table -->
+          <div class="table-panel">
+            <div class="table-header-row">
+              <div class="panel-title" style="border-bottom: none; padding-bottom: 0;">Forensic Incident Log (Last 10)</div>
+              <a href="/api/incidents/export" class="export-link" id="exportIncidentsLink" download>&#11123; Export incident log (JSONL)</a>
+            </div>
+            <div class="table-container">
+              <table class="soc-table" id="incidentsTable">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Time</th>
+                    <th>Level</th>
+                    <th>Attack Type</th>
+                    <th>Target</th>
+                    <th>Confidence</th>
+                    <th>Latency</th>
+                    <th>Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Populated dynamically via DOM textContent -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. Live Telemetry Streams (CAN & V2X) -->
+        <section class="streams-panel" aria-label="Live Telemetry Streams">
+          <!-- CAN Stream -->
+          <div class="table-panel">
+            <div class="panel-title">
+              <span>Live CAN Bus Stream (Last 12 Frames)</span>
+              <span class="panel-title-badge">~480 msg/s</span>
+            </div>
+            <div class="table-container">
+              <table class="soc-table" id="canTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>ID</th>
+                    <th>DLC</th>
+                    <th>Payload (Hex)</th>
+                    <th>Sender</th>
+                    <th>Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Populated dynamically via DOM textContent -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- V2X Stream -->
+          <div class="table-panel">
+            <div class="panel-title">
+              <span>Live V2X Message Stream (Last 10 Messages)</span>
+              <span class="panel-title-badge">10 Hz</span>
+            </div>
+            <div class="table-container">
+              <table class="soc-table" id="v2xTable">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Sender</th>
+                    <th>Type</th>
+                    <th>Trust</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Populated dynamically via DOM textContent -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. Bottom Metrics Strip (8 Cards) -->
+        <footer class="metrics-strip" aria-label="System Evaluation Metrics">
+          <div class="metric-card">
+            <div class="metric-card-title">Accuracy</div>
+            <div class="metric-card-val" id="metricAcc">-</div>
+            <div class="metric-card-sub">Simulator-Only</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">Precision</div>
+            <div class="metric-card-val" id="metricPrec">-</div>
+            <div class="metric-card-sub">Simulator-Only</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">Recall</div>
+            <div class="metric-card-val" id="metricRec">-</div>
+            <div class="metric-card-sub">Simulator-Only</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">F1-Score</div>
+            <div class="metric-card-val" id="metricF1">-</div>
+            <div class="metric-card-sub">Simulator-Only</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">False Positive Rate</div>
+            <div class="metric-card-val" id="metricFpr">-</div>
+            <div class="metric-card-sub">Normal Falsely Blocked</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">Detection Latency</div>
+            <div class="metric-card-val" id="metricDetLat">-</div>
+            <div class="metric-card-sub" id="metricDetLatSub">Mean / p95</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">Gateway Latency</div>
+            <div class="metric-card-val" id="metricFsLat">-</div>
+            <div class="metric-card-sub" id="metricFsLatSub">Mean / p95</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-title">AI Inference Latency</div>
+            <div class="metric-card-val" id="metricInfLat">-</div>
+            <div class="metric-card-sub" id="metricInfLatSub">Mean / p95</div>
+          </div>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

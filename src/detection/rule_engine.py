@@ -1,0 +1,277 @@
+"""
+CAVShield CAN Rule Engine.
+
+Implements frame-level deterministic rule checks:
+- UNKNOWN_ID
+- DLC_MISMATCH
+- CHECKSUM
+- COUNTER freshness versus last ACCEPTED counter
+- TIMING inter-arrival versus last ACCEPTED frame
+- RATE_FLOOD stream rate over sliding 0.25 s window
+
+Follows the safety core architecture: evaluate() does not mutate state (except
+rate counters) so legitimate frames interleaved with attacks are never penalized.
+commit() is called only for forwarded frames.
+"""
+
+from __future__ import annotations
+
+import collections
+from dataclasses import dataclass
+import hashlib
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
+
+from src import load_config
+from src.can_simulator import (
+    DBC,
+    KNOWN_IDS,
+    CANFrame,
+    checksum_ok,
+    counter_of,
+)
+
+
+# ---------------------------------------------------------------------------
+# Evidence Dataclass (CONTRACT Item 41)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Evidence:
+    """Detection evidence matching CONTRACT item 41.
+
+    Attributes
+    ----------
+    source : str
+        Origin of evidence ('rule', 'physics', or 'v2x').
+    name : str
+        Specific rule or check name (e.g. 'CHECKSUM', 'COUNTER', 'RATE_FLOOD').
+    severity : float
+        Confidence / severity of anomaly in [0.0, 1.0].
+    detail : str
+        Human-readable explanation containing specific numbers and context.
+    hint : str
+        Attack class hypothesis ('Flooding', 'Fuzzing', 'Replay', 'Spoofing', or '').
+    """
+    source: str
+    name: str
+    severity: float
+    detail: str
+    hint: str = ""
+
+
+# ---------------------------------------------------------------------------
+# CAN Rule Engine Class
+# ---------------------------------------------------------------------------
+
+class CANRuleEngine:
+    """Deterministic frame-level CAN rule verification engine."""
+
+    def __init__(self, cfg: Optional[Any] = None, rate_window_s: float = 0.25):
+        if cfg is None:
+            cfg = load_config()
+        self.cfg = cfg
+
+        feat_cfg = getattr(cfg, "features", {})
+        self.rate_window_s = float(getattr(feat_cfg, "rate_window_s", rate_window_s))
+
+        rules_cfg = getattr(cfg, "rules", {})
+        self.checksum_weight = float(getattr(rules_cfg, "checksum_weight", 0.80))
+        self.counter_weight = float(getattr(rules_cfg, "counter_weight", 0.55))
+        self.rate_anomaly_weight = float(getattr(rules_cfg, "rate_anomaly_weight", 0.90))
+        self.unknown_id_weight = float(getattr(rules_cfg, "unknown_id_weight", 0.85))
+        self.dlc_mismatch_weight = float(getattr(rules_cfg, "dlc_mismatch_weight", 0.60))
+
+        # Committed state (only updated on commit() for accepted frames)
+        self._last_accepted_ts: Dict[int, float] = {}
+        self._last_accepted_counter: Dict[int, int] = {}
+        self._seen_payload_hashes: Dict[int, Set[int]] = collections.defaultdict(set)
+
+        # Rate tracking deques: updated per frame on evaluate() to monitor live bus rates
+        self._rate_deques: Dict[int, Deque[float]] = collections.defaultdict(collections.deque)
+
+    def reset(self) -> None:
+        """Reset all committed state and rate tracking buffers."""
+        self._last_accepted_ts.clear()
+        self._last_accepted_counter.clear()
+        self._seen_payload_hashes.clear()
+        self._rate_deques.clear()
+
+    def stream_rate_ratio(self, arb_id: int) -> float:
+        """Return the ratio of current observed stream rate to nominal rate."""
+        q = self._rate_deques.get(arb_id)
+        if not q:
+            return 0.0
+
+        current_rate_hz = len(q) / self.rate_window_s
+        mdef = DBC.get(arb_id)
+        if mdef is not None and mdef.period_s > 0:
+            nominal_hz = 1.0 / mdef.period_s
+            return current_rate_hz / nominal_hz
+        return current_rate_hz / 10.0  # nominal default for unknown IDs
+
+    def evaluate(self, frame: CANFrame) -> List[Evidence]:
+        """Evaluate deterministic rules against a single incoming frame.
+
+        Does not mutate committed state. Updates stream rate counters only.
+
+        Parameters
+        ----------
+        frame : CANFrame
+            Incoming CAN frame.
+
+        Returns
+        -------
+        List[Evidence]
+            List of rule violation evidence (empty if frame is completely valid).
+        """
+        evidence_list: List[Evidence] = []
+        now = frame.timestamp
+        arb_id = frame.arb_id
+        data = frame.data
+
+        # 1. Update live rate tracking deque
+        q = self._rate_deques[arb_id]
+        cutoff = now - self.rate_window_s
+        while q and q[0] < cutoff:
+            q.popleft()
+        q.append(now)
+        current_rate_hz = len(q) / self.rate_window_s
+
+        # -------------------------------------------------------------------
+        # Rule 1: UNKNOWN_ID
+        # -------------------------------------------------------------------
+        is_known = arb_id in KNOWN_IDS
+        if not is_known:
+            evidence_list.append(Evidence(
+                source="rule",
+                name="UNKNOWN_ID",
+                severity=self.unknown_id_weight,
+                detail=f"Unknown CAN ID 0x{arb_id:03X} not in DBC catalog",
+                hint="Fuzzing",
+            ))
+
+        # -------------------------------------------------------------------
+        # Rule 2: DLC_MISMATCH
+        # -------------------------------------------------------------------
+        if frame.dlc != 8 or len(data) != 8:
+            evidence_list.append(Evidence(
+                source="rule",
+                name="DLC_MISMATCH",
+                severity=self.dlc_mismatch_weight,
+                detail=f"DLC mismatch for 0x{arb_id:03X}: expected 8 bytes, got {frame.dlc}",
+                hint="Fuzzing",
+            ))
+            # Cannot safely evaluate checksum or counter if payload length is invalid
+            return evidence_list
+
+        # -------------------------------------------------------------------
+        # Rule 3: CHECKSUM
+        # -------------------------------------------------------------------
+        if not checksum_ok(data):
+            expected_chk = data[0] ^ data[1] ^ data[2] ^ data[3] ^ data[4] ^ data[5]
+            evidence_list.append(Evidence(
+                source="rule",
+                name="CHECKSUM",
+                severity=self.checksum_weight,
+                detail=(
+                    f"Corrupt XOR checksum on 0x{arb_id:03X}: byte 6 is 0x{data[6]:02X}, "
+                    f"expected 0x{expected_chk:02X}"
+                ),
+                hint="Fuzzing",
+            ))
+
+        # -------------------------------------------------------------------
+        # Rule 4: COUNTER Freshness versus last ACCEPTED counter
+        # -------------------------------------------------------------------
+        if is_known and arb_id in self._last_accepted_counter:
+            last_counter = self._last_accepted_counter[arb_id]
+            curr_counter = counter_of(data)
+            expected_counter = (last_counter + 1) % 16
+
+            # Sequential tolerance: accept +1 or +2 (in case of single dropped frame)
+            delta = (curr_counter - last_counter) % 16
+            if delta not in (1, 2):
+                # Check if this exact payload was previously observed for this ID
+                payload_hash = hash(data)
+                seen_before = payload_hash in self._seen_payload_hashes[arb_id]
+
+                if seen_before:
+                    sev = 0.85
+                    hint_type = "Replay"
+                    extra = " (payload previously observed - replay detected)"
+                else:
+                    sev = self.counter_weight
+                    hint_type = "Spoofing"
+                    extra = ""
+
+                evidence_list.append(Evidence(
+                    source="rule",
+                    name="COUNTER",
+                    severity=sev,
+                    detail=(
+                        f"Alive counter discontinuity on 0x{arb_id:03X}: received {curr_counter}, "
+                        f"expected {expected_counter} (last accepted {last_counter}){extra}"
+                    ),
+                    hint=hint_type,
+                ))
+
+        # -------------------------------------------------------------------
+        # Rule 5: TIMING (Inter-arrival < 0.45 x nominal period since last ACCEPTED)
+        # -------------------------------------------------------------------
+        if is_known and arb_id in self._last_accepted_ts:
+            period_s = DBC[arb_id].period_s
+            dt = now - self._last_accepted_ts[arb_id]
+            if dt < (0.45 * period_s):
+                evidence_list.append(Evidence(
+                    source="rule",
+                    name="TIMING",
+                    severity=0.50,
+                    detail=(
+                        f"Timing violation on 0x{arb_id:03X}: inter-arrival dt={dt*1000.0:.1f}ms "
+                        f"< 0.45x nominal period ({0.45*period_s*1000.0:.1f}ms)"
+                    ),
+                    hint="Spoofing",
+                ))
+
+        # -------------------------------------------------------------------
+        # Rule 6: RATE_FLOOD (Stream rate > 2.5 x nominal with >= 6 frames)
+        # -------------------------------------------------------------------
+        if is_known:
+            nominal_hz = 1.0 / DBC[arb_id].period_s
+            ratio = current_rate_hz / nominal_hz
+            if len(q) >= 6 and ratio > 2.5:
+                evidence_list.append(Evidence(
+                    source="rule",
+                    name="RATE_FLOOD",
+                    severity=self.rate_anomaly_weight,
+                    detail=(
+                        f"Rate flood on 0x{arb_id:03X}: {current_rate_hz:.1f} Hz "
+                        f"({ratio:.1f}x nominal {nominal_hz:.1f} Hz over {self.rate_window_s:.2f}s)"
+                    ),
+                    hint="Flooding",
+                ))
+        else:
+            # Unknown ID stream rate check: above 40 Hz
+            if len(q) >= 6 and current_rate_hz > 40.0:
+                evidence_list.append(Evidence(
+                    source="rule",
+                    name="RATE_FLOOD",
+                    severity=self.rate_anomaly_weight,
+                    detail=(
+                        f"Flood on unknown ID 0x{arb_id:03X}: {current_rate_hz:.1f} Hz "
+                        f"exceeds 40 Hz threshold"
+                    ),
+                    hint="Flooding",
+                ))
+
+        return evidence_list
+
+    def commit(self, frame: CANFrame) -> None:
+        """Commit an accepted / forwarded frame to update baseline state.
+
+        Call ONLY for frames that passed the gateway verification.
+        """
+        arb_id = frame.arb_id
+        self._last_accepted_ts[arb_id] = frame.timestamp
+        self._last_accepted_counter[arb_id] = counter_of(frame.data)
+        self._seen_payload_hashes[arb_id].add(hash(frame.data))

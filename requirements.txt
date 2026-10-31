@@ -1,0 +1,18 @@
+# CAVShield dependencies – use Python 3.11/3.12
+python-can>=4.3
+numpy
+pandas<3.0
+pyyaml
+scikit-learn
+lightgbm
+joblib
+fastapi>=0.110
+uvicorn>=0.29
+websockets>=12
+httpx
+plotly
+torch
+onnx
+onnxruntime
+pytest
+

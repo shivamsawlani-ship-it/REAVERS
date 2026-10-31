@@ -1,0 +1,957 @@
+/* ==========================================================================
+   CAVShield Cyber-Physical Security Operations Center (SOC) Console
+   Theme: Dark Automotive SOC Console
+   ========================================================================== */
+
+:root {
+  --bg-app: #080c14;
+  --bg-card: #0f1623;
+  --bg-card-hover: #151e2f;
+  --bg-surface: #141c2c;
+  --border-subtle: #1e293b;
+  --border-focus: #38bdf8;
+  --border-active: #3b82f6;
+
+  --text-main: #f8fafc;
+  --text-dim: #94a3b8;
+  --text-muted: #64748b;
+
+  --col-normal: #10b981;
+  --col-normal-bg: rgba(16, 185, 129, 0.12);
+  --col-normal-border: #059669;
+
+  --col-alert: #f59e0b;
+  --col-alert-bg: rgba(245, 158, 11, 0.12);
+  --col-alert-border: #d97706;
+
+  --col-degraded: #f97316;
+  --col-degraded-bg: rgba(249, 115, 22, 0.14);
+  --col-degraded-border: #ea580c;
+
+  --col-safemode: #ef4444;
+  --col-safemode-bg: rgba(239, 68, 68, 0.15);
+  --col-safemode-border: #dc2626;
+
+  --col-cyan: #38bdf8;
+  --col-purple: #a855f7;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* --------------------------------------------------------------------------
+   App Container & Navigation Header
+   -------------------------------------------------------------------------- */
+
+.app-wrapper {
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: 12px 18px 24px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.top-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-shield {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.brand-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #fff;
+}
+
+.brand-subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-left: 6px;
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 10px;
+}
+
+.header-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--col-normal);
+}
+
+.chip-conn.live .chip-dot {
+  background: var(--col-normal);
+  box-shadow: 0 0 8px var(--col-normal);
+  animation: pulse-green 2s infinite;
+}
+
+.chip-conn.reconnecting .chip-dot {
+  background: var(--col-alert);
+  box-shadow: 0 0 8px var(--col-alert);
+  animation: pulse-amber 1s infinite;
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+@keyframes pulse-amber {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* --------------------------------------------------------------------------
+   Vehicle Mode & Threat Status Banner
+   -------------------------------------------------------------------------- */
+
+.mode-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  transition: all 0.3s ease;
+  box-shadow: var(--shadow-card);
+}
+
+.mode-banner.mode-normal {
+  border-color: var(--col-normal-border);
+  background: linear-gradient(90deg, rgba(16,185,129,0.15), rgba(15,22,35,0.9));
+}
+
+.mode-banner.mode-alert {
+  border-color: var(--col-alert-border);
+  background: linear-gradient(90deg, rgba(245,158,11,0.18), rgba(15,22,35,0.9));
+}
+
+.mode-banner.mode-degraded {
+  border-color: var(--col-degraded-border);
+  background: linear-gradient(90deg, rgba(249,115,22,0.20), rgba(15,22,35,0.9));
+}
+
+.mode-banner.mode-safemode {
+  border-color: var(--col-safemode-border);
+  background: linear-gradient(90deg, rgba(239,68,68,0.22), rgba(15,22,35,0.9));
+}
+
+.banner-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mode-pill {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.mode-banner.mode-normal .mode-pill { background: var(--col-normal); color: #042f1a; }
+.mode-banner.mode-alert .mode-pill { background: var(--col-alert); color: #381a02; }
+.mode-banner.mode-degraded .mode-pill { background: var(--col-degraded); color: #3b1102; }
+.mode-banner.mode-safemode .mode-pill { background: var(--col-safemode); color: #3d0202; animation: blink-fast 1s infinite; }
+
+@keyframes blink-fast {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+
+.banner-headline {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.banner-action {
+  font-size: 12px;
+  color: var(--text-dim);
+  border-left: 2px solid var(--border-subtle);
+  padding-left: 12px;
+}
+
+.banner-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.prot-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.5px;
+}
+
+.prot-badge.on {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid var(--col-normal);
+  color: var(--col-normal);
+}
+
+.prot-badge.off {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid var(--col-safemode);
+  color: var(--col-safemode);
+}
+
+/* --------------------------------------------------------------------------
+   Interactive Demo Caption Bar
+   -------------------------------------------------------------------------- */
+
+.demo-caption-bar {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(90deg, #1e1b4b, #0f172a);
+  border: 1px solid #4f46e5;
+  border-radius: var(--radius-md);
+  color: #e0e7ff;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 0 16px rgba(79, 70, 229, 0.3);
+}
+
+.demo-caption-bar.active {
+  display: flex;
+}
+
+.demo-pulse-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #6366f1;
+  box-shadow: 0 0 10px #6366f1;
+  animation: pulse-demo 1.5s infinite;
+}
+
+@keyframes pulse-demo {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.5; }
+}
+
+/* --------------------------------------------------------------------------
+   Main Console Grid Layout
+   -------------------------------------------------------------------------- */
+
+.main-grid {
+  display: grid;
+  grid-template-columns: 270px 1fr;
+  gap: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Left Column: Adversary & Scenario Controls
+   -------------------------------------------------------------------------- */
+
+.controls-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 6px;
+}
+
+.panel-title-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-surface);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--col-cyan);
+}
+
+.btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-label-group {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+button.btn-soc {
+  background: var(--bg-surface);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.15s ease-in-out;
+}
+
+button.btn-soc:hover {
+  background: var(--bg-card-hover);
+  border-color: #334155;
+  color: #fff;
+}
+
+button.btn-soc:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* Attack Button States */
+button.btn-attack.active {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: var(--col-safemode);
+  color: #fca5a5;
+  font-weight: 700;
+  animation: pulse-btn 1.5s infinite;
+}
+
+@keyframes pulse-btn {
+  0%, 100% { border-color: var(--col-safemode); }
+  50% { border-color: #f87171; }
+}
+
+/* Legit event button */
+button.btn-legit {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #a7f3d0;
+  font-weight: 600;
+}
+
+button.btn-legit:hover {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: var(--col-normal);
+}
+
+/* Protection Switch Button */
+button.btn-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+button.btn-switch.on {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid var(--col-normal);
+  color: var(--col-normal);
+}
+
+button.btn-switch.off {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid var(--col-safemode);
+  color: var(--col-safemode);
+}
+
+/* Demo and Reset Buttons */
+button.btn-demo {
+  background: linear-gradient(135deg, #3730a3, #4338ca);
+  border: 1px solid #6366f1;
+  color: #fff;
+  font-weight: 600;
+  text-align: center;
+  justify-content: center;
+  padding: 8px;
+}
+
+button.btn-demo:hover {
+  background: linear-gradient(135deg, #4338ca, #4f46e5);
+}
+
+button.btn-reset {
+  background: #1e293b;
+  border: 1px solid #475569;
+  color: var(--text-dim);
+  text-align: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+button.btn-reset:hover {
+  background: #334155;
+  color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   Right Column Content Area
+   -------------------------------------------------------------------------- */
+
+.content-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Section 1: Vehicle Digital Twin Cards (6 cards)
+   -------------------------------------------------------------------------- */
+
+.twin-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+}
+
+.twin-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: var(--shadow-card);
+  min-height: 86px;
+}
+
+.twin-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.twin-value {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  margin: 4px 0;
+}
+
+.twin-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.twin-card.safety-card.safe {
+  border-color: var(--col-normal-border);
+  background: var(--col-normal-bg);
+}
+
+.twin-card.safety-card.safe .twin-value {
+  color: var(--col-normal);
+}
+
+.twin-card.safety-card.unsafe {
+  border-color: var(--col-safemode-border);
+  background: var(--col-safemode-bg);
+  animation: pulse-safety 1s infinite;
+}
+
+.twin-card.safety-card.unsafe .twin-value {
+  color: var(--col-safemode);
+}
+
+@keyframes pulse-safety {
+  0%, 100% { border-color: var(--col-safemode-border); }
+  50% { border-color: #fca5a5; }
+}
+
+.spoofed-speed-alert {
+  color: var(--col-safemode);
+  font-weight: 700;
+  animation: blink-fast 1s infinite;
+}
+
+/* --------------------------------------------------------------------------
+   Section 2: Threat Monitoring & AI Fusion
+   -------------------------------------------------------------------------- */
+
+.threat-panel {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+}
+
+.chart-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.leg-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.leg-color {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+#threatPlotly {
+  width: 100%;
+  height: 150px;
+}
+
+.threat-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.kpi-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.kpi-title {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.kpi-val {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  margin-top: 2px;
+}
+
+.explanation-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--col-normal);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 11px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.explanation-box.level-critical,
+.explanation-box.level-high {
+  border-left-color: var(--col-safemode);
+}
+
+.explanation-box.level-medium {
+  border-left-color: var(--col-alert);
+}
+
+.explanation-title {
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--text-main);
+}
+
+.explanation-body {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+/* --------------------------------------------------------------------------
+   Section 3: Fail-Safe Status & Forensic Log
+   -------------------------------------------------------------------------- */
+
+.failsafe-panel {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 12px;
+}
+
+.table-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--shadow-card);
+}
+
+.table-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.table-container {
+  overflow-y: auto;
+  max-height: 220px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+table.soc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+}
+
+table.soc-table th {
+  background: var(--bg-surface);
+  color: var(--text-dim);
+  padding: 6px 8px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  position: sticky;
+  top: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  z-index: 2;
+}
+
+table.soc-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+table.soc-table tr:hover {
+  background: var(--bg-surface);
+}
+
+/* Gateway Action Items in FailSafe status */
+.failsafe-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.stat-chip-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-chip-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.stat-chip-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+  max-height: 120px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 6px;
+}
+
+.action-item {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  padding: 2px 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Section 4: Live Telemetry Streams (CAN & V2X)
+   -------------------------------------------------------------------------- */
+
+.streams-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Stream Row Styles */
+tr.row-blocked {
+  background: rgba(239, 68, 68, 0.16) !important;
+  color: #fca5a5 !important;
+}
+
+tr.row-suspicious {
+  background: rgba(245, 158, 11, 0.12) !important;
+  color: #fde68a !important;
+}
+
+/* Pill Badges for Tables */
+.pill {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 9999px;
+  display: inline-block;
+  letter-spacing: 0.5px;
+}
+
+.pill-normal { background: rgba(16, 185, 129, 0.2); color: var(--col-normal); border: 1px solid rgba(16, 185, 129, 0.4); }
+.pill-suspicious { background: rgba(245, 158, 11, 0.2); color: var(--col-alert); border: 1px solid rgba(245, 158, 11, 0.4); }
+.pill-blocked { background: rgba(239, 68, 68, 0.25); color: var(--col-safemode); border: 1px solid rgba(239, 68, 68, 0.5); }
+
+.pill-accepted { background: rgba(16, 185, 129, 0.2); color: var(--col-normal); border: 1px solid rgba(16, 185, 129, 0.4); }
+.pill-rejected { background: rgba(239, 68, 68, 0.25); color: var(--col-safemode); border: 1px solid rgba(239, 68, 68, 0.5); }
+
+.pill-level-critical { background: #7f1d1d; color: #fca5a5; }
+.pill-level-high { background: #7c2d12; color: #fdba74; }
+.pill-level-medium { background: #78350f; color: #fde68a; }
+.pill-level-low { background: #064e3b; color: #86efac; }
+
+.v2x-reason-sub {
+  font-size: 9px;
+  color: #f87171;
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   Section 5: Bottom Metrics Strip (8 Cards)
+   -------------------------------------------------------------------------- */
+
+.metrics-strip {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 10px;
+}
+
+.metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: center;
+  box-shadow: var(--shadow-card);
+}
+
+.metric-card-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+.metric-card-val {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 800;
+  color: #fff;
+  margin: 3px 0;
+}
+
+.metric-card-sub {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.export-link {
+  font-size: 11px;
+  color: var(--col-cyan);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.export-link:hover {
+  text-decoration: underline;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive Layout Degrades
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 1280px) {
+  .twin-cards-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .metrics-strip {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 1000px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+  .threat-panel {
+    grid-template-columns: 1fr;
+  }
+  .failsafe-panel {
+    grid-template-columns: 1fr;
+  }
+  .streams-panel {
+    grid-template-columns: 1fr;
+  }
+  .metrics-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

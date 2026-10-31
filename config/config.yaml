@@ -1,0 +1,132 @@
+# CAVShield Configuration – all tunables
+# Every value here can be overridden via load_config(overrides={...})
+
+simulation:
+  world_hz: 200                   # physics tick rate (Hz)
+  cruise_kmh: 72                  # normal cruising speed (km/h)
+  degraded_kmh: 50                # speed limit in DEGRADED mode
+  safe_kmh: 30                    # speed limit in SAFE MODE
+  driver_brake_first_s: 6         # first driver brake event (seconds)
+  driver_brake_interval_s: 35     # subsequent brake events interval (seconds)
+  driver_brake_peak_pct: 22       # peak brake pedal percent
+  brake_gain: 0.1                 # m/s² per percent pedal
+  command_timeout_s: 0.06         # max age for ADAS commands (seconds)
+  protection_enabled: true        # IDS gateway active at start
+
+can:
+  interface: virtual
+  channel: cavshield
+  command_udp_port: 47474
+
+v2x:
+  beacon_hz: 10                   # BSM broadcast rate (Hz)
+  comm_range_m: 300               # communication range (metres)
+  max_age_s: 1.0                  # max acceptable message age
+  trust_accept: 0.6               # trust threshold for acceptance
+  kinematic_tolerance: 0.15       # tolerance for kinematic plausibility
+  radar_cover_m: 80               # radar confirmation range
+  secret_seed: "cavshield-v2x-hmac-seed"
+  precrash_decel: 3.0             # pre-crash braking decel (m/s²)
+  precrash_duration_s: 2.5        # pre-crash braking duration (seconds)
+
+sensors:
+  radar_range_m: 150
+  lidar_range_m: 100
+  camera_range_m: 70
+  gps_sigma_m: 1.2
+  lane_half_width_m: 1.8
+  aeb_ttc_s: 1.8                  # AEB time-to-collision threshold
+
+features:
+  vector_size: 17                 # per-message feature vector length
+  window_size: 64
+  window_stride: 16
+  rate_window_s: 0.25             # sliding window for rate calculations
+
+rules:
+  checksum_weight: 0.8
+  counter_weight: 0.55
+  rate_anomaly_weight: 0.9
+  unknown_id_weight: 0.85
+  dlc_mismatch_weight: 0.6
+
+physics:
+  max_decel: 10.0                 # physical max deceleration (m/s²)
+  max_accel_cmd: 3.0              # max allowed acceleration command (m/s²)
+  pedal_tolerance_pct: 1.2        # pedal value tolerance (percent)
+  speed_wheel_tolerance_kmh: 4.0  # speed vs wheel-speed tolerance (km/h)
+  rpm_base: 750                   # idle RPM
+  rpm_per_kmh: 28                 # RPM increase per km/h
+  rpm_tolerance: 1100             # RPM consistency tolerance
+  gear_change_max_kmh: 5.0        # max speed for gear-change plausibility
+  steering_rate_dps: 450          # max steering rate (degrees per second)
+  acc_max_brake: 3.5              # ACC maximum braking (m/s²)
+
+risk:
+  weights:
+    w_det: 0.65
+    w_ai: 0.35
+  thresholds:
+    low: 0.25
+    medium: 0.50
+    high: 0.72
+  critical_ai_conf: 0.60
+  ai_fresh_s: 0.8
+  ai_only_cap: 0.45
+  use_ai: true
+  use_can_rules: true
+  use_v2x: true
+  use_physics: true
+
+failsafe:
+  recovery_timers_s:
+    safe_to_degraded: 12
+    degraded_to_alert: 8
+    alert_to_normal: 4
+  incident_merge_s: 2.0
+
+ai:
+  anomaly_backend: "iforest"        # "iforest" | "lstm_ae"
+  anomaly_threshold: 0.5
+  classifier_threshold: 0.5
+  min_class_confidence: 0.45        # minimum confidence to accept known class
+  model_dir: "output/models"
+  onnx_anomaly: "anomaly_ae.onnx"
+  onnx_classifier: "attack_clf.onnx"
+
+training:
+  normal_runs: 8
+  normal_duration_s: 45
+  attack_runs_per_type: 4
+  attack_duration_s: 30
+  test_split_pct: 25
+  attack_window_fraction: 0.15
+
+attacks:
+  flood:
+    rate_hz: 700
+    ids: [0x000, 0x0A0]
+  fuzz:
+    rate_hz: 300
+  spoof:
+    rate_hz: 100
+    spoof_brake_decel: 7.0        # m/s²
+    spoof_speed_kmh: 125
+    spoof_rpm: 7000
+  v2x:
+    rate_hz: 10
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  data_sample: "data/sample"
+  output_models: "output/models"
+  output_metrics: "output/metrics"
+  output_logs: "output/logs"
+  output_figures: "output/figures"
+  reference: "reference"
+
