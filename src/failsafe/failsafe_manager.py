@@ -358,13 +358,19 @@ class FailSafeManager:
 
                 if is_cmd:
                     self._set_mode(self.MODE_SAFE_MODE, curr_time, f"Critical command spoofing 0x{frame.arb_id:03X}")
-                    self.rejected_commands[frame.arb_id] += 1
-                    act = f"Rejected spoofed command 0x{frame.arb_id:03X}"
+                    if self.protection_enabled:
+                        self.rejected_commands[frame.arb_id] += 1
+                        act = f"Rejected spoofed command 0x{frame.arb_id:03X}"
+                    else:
+                        act = f"Observed spoofed command 0x{frame.arb_id:03X} (protection OFF: forwarded)"
                     actions.append(act)
                     self.recent_actions.append(act)
                 else:
                     self._set_mode(self.MODE_DEGRADED, curr_time, f"Critical status compromise 0x{frame.arb_id:03X}")
-                    act = f"Blocked critical status frame 0x{frame.arb_id:03X}"
+                    if self.protection_enabled:
+                        act = f"Blocked critical status frame 0x{frame.arb_id:03X}"
+                    else:
+                        act = f"Observed critical status frame 0x{frame.arb_id:03X} (protection OFF: forwarded)"
                     actions.append(act)
                     self.recent_actions.append(act)
 
@@ -378,34 +384,44 @@ class FailSafeManager:
                     self._set_mode(self.MODE_ALERT, curr_time, f"High risk event on 0x{frame.arb_id:03X}")
 
                 if is_unknown or decision.attack_type == "Fuzzing":
-                    # Quarantine unknown ID for 5.0 s
-                    self.quarantine_expiry[frame.arb_id] = curr_time + 5.0
-                    forward = False
-                    act = f"Quarantined unknown ID 0x{frame.arb_id:03X} for 5.0 s"
+                    if self.protection_enabled:
+                        self.quarantine_expiry[frame.arb_id] = curr_time + 5.0
+                        forward = False
+                        act = f"Quarantined unknown ID 0x{frame.arb_id:03X} for 5.0 s"
+                    else:
+                        act = f"Observed unknown ID 0x{frame.arb_id:03X} (protection OFF: forwarded)"
                     actions.append(act)
                     self.recent_actions.append(act)
 
                 elif decision.attack_type == "Flooding":
-                    # Rate limit ID
-                    self.rate_limited_active_ids.add(frame.arb_id)
-                    forward = self.gate(frame, curr_time)
-                    act = f"Rate-limited flooding stream 0x{frame.arb_id:03X}"
+                    if self.protection_enabled:
+                        self.rate_limited_active_ids.add(frame.arb_id)
+                        forward = self.gate(frame, curr_time)
+                        act = f"Rate-limited flooding stream 0x{frame.arb_id:03X}"
+                    else:
+                        act = f"Observed flooding stream 0x{frame.arb_id:03X} (protection OFF: forwarded)"
                     actions.append(act)
                     self.recent_actions.append(act)
 
                 elif decision.attack_type in ("Spoofing", "Replay"):
                     forward = False
-                    if is_cmd:
-                        self.rejected_commands[frame.arb_id] += 1
-                        act = f"Rejected {decision.attack_type.lower()} command 0x{frame.arb_id:03X}"
+                    if self.protection_enabled:
+                        if is_cmd:
+                            self.rejected_commands[frame.arb_id] += 1
+                            act = f"Rejected {decision.attack_type.lower()} command 0x{frame.arb_id:03X}"
+                        else:
+                            act = f"Dropped {decision.attack_type.lower()} frame 0x{frame.arb_id:03X}"
                     else:
-                        act = f"Dropped {decision.attack_type.lower()} frame 0x{frame.arb_id:03X}"
+                        act = f"Observed {decision.attack_type.lower()} on 0x{frame.arb_id:03X} (protection OFF: forwarded)"
                     actions.append(act)
                     self.recent_actions.append(act)
 
                 else:
                     forward = False
-                    act = f"Dropped anomalous frame 0x{frame.arb_id:03X}"
+                    if self.protection_enabled:
+                        act = f"Dropped anomalous frame 0x{frame.arb_id:03X}"
+                    else:
+                        act = f"Observed anomalous frame 0x{frame.arb_id:03X} (protection OFF: forwarded)"
                     actions.append(act)
                     self.recent_actions.append(act)
 
@@ -512,8 +528,11 @@ class FailSafeManager:
             )
 
             if is_rejected:
-                self.rejected_v2x_count += 1
-                act = f"Rejected unverified V2X {msg.msg_type} from {msg.sender_id}"
+                if self.protection_enabled:
+                    self.rejected_v2x_count += 1
+                    act = f"Rejected unverified V2X {msg.msg_type} from {msg.sender_id}"
+                else:
+                    act = f"Observed unverified V2X {msg.msg_type} from {msg.sender_id} (protection OFF: accepted)"
                 self.recent_actions.append(act)
 
                 if decision.level == RiskLevel.CRITICAL:

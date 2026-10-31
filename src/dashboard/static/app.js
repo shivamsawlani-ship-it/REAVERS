@@ -722,7 +722,7 @@
       const v = (f.verdict || "normal").toLowerCase();
 
       if (v === "blocked") tr.className = "row-blocked";
-      else if (v === "suspicious") tr.className = "row-suspicious";
+      else if (v === "suspicious" || v === "forwarded") tr.className = "row-suspicious";
 
       tr.appendChild(createTextEl("td", f.ts != null ? f.ts.toFixed(3) : "-"));
 
@@ -770,7 +770,7 @@
       const st = (msg.status || "accepted").toLowerCase();
 
       if (st === "rejected") tr.className = "row-blocked";
-      else if (st === "suspicious") tr.className = "row-suspicious";
+      else if (st === "suspicious" || st === "forwarded") tr.className = "row-suspicious";
 
       tr.appendChild(createTextEl("td", msg.ts != null ? msg.ts.toFixed(3) : "-"));
 
@@ -792,7 +792,7 @@
       const stPill = createTextEl("span", msg.status || "accepted", `pill pill-${st}`);
       stTd.appendChild(stPill);
 
-      if ((st === "rejected" || st === "suspicious") && msg.reason) {
+      if ((st === "rejected" || st === "suspicious" || st === "forwarded") && msg.reason) {
         const reasonSub = createTextEl("span", msg.reason, "v2x-reason-sub");
         stTd.appendChild(reasonSub);
       }

@@ -801,7 +801,10 @@ class CAVShieldEngine:
                                 elif frame.arb_id in KNOWN_IDS:
                                     self.world.twin.accept_status(frame.arb_id, decoded, now=now)
 
-                            verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
+                            if not self.failsafe.protection_enabled and decision.level >= RiskLevel.HIGH:
+                                verdict_str = "forwarded"
+                            else:
+                                verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
                         else:
                             verdict_str = "blocked"
 
@@ -841,9 +844,12 @@ class CAVShieldEngine:
                     with self._world_lock:
                         self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
 
-                status_str = getattr(verdict, "status", "accepted" if accepted else "rejected")
-                if not accepted and status_str == "accepted":
-                    status_str = "rejected"
+                if not self.failsafe.protection_enabled and (getattr(verdict, "status", "accepted") == "rejected" or decision.level >= RiskLevel.HIGH):
+                    status_str = "forwarded"
+                else:
+                    status_str = getattr(verdict, "status", "accepted" if accepted else "rejected")
+                    if not accepted and status_str == "accepted":
+                        status_str = "rejected"
                 reason_str = "; ".join(verdict.reasons) if verdict.reasons else "Verified"
                 trust_val = verdict.trust
 
@@ -878,7 +884,7 @@ class CAVShieldEngine:
             }
             self.recent_can_live.appendleft(entry)
 
-            is_flagged = (verdict in ("blocked", "suspicious")) or (getattr(frame, "label", "Normal") != "Normal")
+            is_flagged = (verdict in ("blocked", "suspicious", "forwarded")) or (getattr(frame, "label", "Normal") != "Normal")
             if is_flagged:
                 arb_str = f"0x{frame.arb_id:03X}"
                 if (
@@ -929,7 +935,7 @@ class CAVShieldEngine:
             }
             self.recent_v2x_live.appendleft(entry)
 
-            is_flagged = (status in ("rejected", "suspicious")) or (getattr(msg, "label", "Normal") != "Normal")
+            is_flagged = (status in ("rejected", "suspicious", "forwarded")) or (getattr(msg, "label", "Normal") != "Normal")
             if is_flagged:
                 if (
                     self.flagged_v2x

@@ -1019,6 +1019,7 @@ tr.row-suspicious {
 .pill-normal { background: rgba(16, 185, 129, 0.2); color: var(--col-normal); border: 1px solid rgba(16, 185, 129, 0.4); }
 .pill-suspicious { background: rgba(245, 158, 11, 0.2); color: var(--col-alert); border: 1px solid rgba(245, 158, 11, 0.4); }
 .pill-blocked { background: rgba(239, 68, 68, 0.25); color: var(--col-safemode); border: 1px solid rgba(239, 68, 68, 0.5); }
+.pill-forwarded { background: rgba(245, 158, 11, 0.25); color: var(--col-alert); border: 1px solid rgba(245, 158, 11, 0.5); }
 
 .pill-accepted { background: rgba(16, 185, 129, 0.2); color: var(--col-normal); border: 1px solid rgba(16, 185, 129, 0.4); }
 .pill-rejected { background: rgba(239, 68, 68, 0.25); color: var(--col-safemode); border: 1px solid rgba(239, 68, 68, 0.5); }
