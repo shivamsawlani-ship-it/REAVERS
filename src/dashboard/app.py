@@ -440,3 +440,4 @@ def serve(
     app = create_app(engine)
     logger.info("Serving CAVShield Dashboard on http://%s:%d", srv_host, srv_port)
     uvicorn.run(app, host=srv_host, port=srv_port, log_level="info")
+

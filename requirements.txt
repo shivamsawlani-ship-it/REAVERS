@@ -15,4 +15,5 @@ torch
 onnx
 onnxruntime
 pytest
+matplotlib
 
