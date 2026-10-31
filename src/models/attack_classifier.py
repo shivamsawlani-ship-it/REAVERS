@@ -49,7 +49,6 @@ def build_classifier(
         import lightgbm as lgb  # type: ignore
 
         clf = lgb.LGBMClassifier(
-            objective="multiclass",
             class_weight="balanced",
             n_estimators=n_estimators,
             learning_rate=learning_rate,

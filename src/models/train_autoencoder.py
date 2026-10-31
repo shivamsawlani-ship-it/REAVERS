@@ -37,7 +37,10 @@ from src.can_simulator import KNOWN_IDS
 from src.data_loader import (
     build_window_dataset,
     generate_synthetic_dataset,
+    load_all_hcrl,
+    load_hcrl_car_hacking,
     split_train_test_by_run,
+    split_train_test_by_time_block,
 )
 from src.models.lstm_autoencoder import LSTMAutoencoder
 
@@ -219,28 +222,82 @@ def train_autoencoder(
 
     # 1. Load or Generate Dataset
     data_proc_dir = Path(getattr(cfg.paths, "data_processed", "data/processed"))
-    target_csv = (
-        Path(dataset_path)
-        if dataset_path
-        else data_proc_dir / "synthetic_can_dataset.csv.gz"
-    )
+    is_hcrl = False
+    known_ids = KNOWN_IDS
 
-    if not target_csv.exists():
-        logger.info("Dataset not found at %s. Generating synthetic dataset...", target_csv)
-        df_can = generate_synthetic_dataset(cfg, quick=quick)
+    if dataset_path == "hcrl":
+        is_hcrl = True
+        npz_path = data_proc_dir / "hcrl_windows.npz"
+        if npz_path.exists():
+            logger.info("Loading precomputed HCRL windows from %s...", npz_path)
+            data = np.load(npz_path, allow_pickle=True)
+            X_seq = data["X_seq"]
+            X_stat = data["X_stat"]
+            y = data["y"]
+            subtypes = data["subtypes"]
+            run_ids = data["run_ids"]
+            t_ends = data["t_ends"]
+            known_ids = data["known_ids"].tolist()
+        else:
+            logger.info("Loading all HCRL CSV files from data/raw/...")
+            max_r = 100000 if quick else None
+            df_can = load_all_hcrl(max_rows_per_file=max_r, cfg=cfg)
+            normal_df = df_can[df_can["label"] == "Normal"]
+            known_ids = [int(x) for x in normal_df["arb_id"].value_counts().nlargest(30).index.tolist()]
+            logger.info("Building HCRL windows (known_ids count: %d)...", len(known_ids))
+            X_seq, X_stat, y, subtypes, run_ids, t_ends = build_window_dataset(
+                df_can, known_ids=known_ids, cfg=cfg
+            )
+    elif dataset_path and (
+        "dataset.csv" in Path(dataset_path).name.lower()
+        or Path(dataset_path).name.lower().startswith(("dos", "fuzzy", "gear", "rpm"))
+    ):
+        is_hcrl = True
+        target_path = Path(dataset_path)
+        logger.info("Loading single HCRL dataset file from %s...", target_path)
+        max_r = 50000 if quick else None
+        df_can = load_hcrl_car_hacking(target_path, max_rows=max_r, cfg=cfg)
+        normal_df = df_can[df_can["label"] == "Normal"]
+        known_ids = [int(x) for x in normal_df["arb_id"].value_counts().nlargest(30).index.tolist()]
+        logger.info("Building HCRL windows (known_ids count: %d)...", len(known_ids))
+        X_seq, X_stat, y, subtypes, run_ids, t_ends = build_window_dataset(
+            df_can, known_ids=known_ids, cfg=cfg
+        )
     else:
-        logger.info("Loading dataset from %s...", target_csv)
-        df_can = pd.read_csv(target_csv)
+        target_csv = (
+            Path(dataset_path)
+            if dataset_path
+            else data_proc_dir / "synthetic_can_dataset.csv.gz"
+        )
+        if not target_csv.exists():
+            logger.info("Dataset not found at %s. Generating synthetic dataset...", target_csv)
+            df_can = generate_synthetic_dataset(cfg, quick=quick)
+        else:
+            logger.info("Loading dataset from %s...", target_csv)
+            df_can = pd.read_csv(target_csv)
 
-    # 2. Build Window Features
-    X_seq, X_stat, y, subtypes, run_ids, t_ends = build_window_dataset(
-        df_can, known_ids=KNOWN_IDS, cfg=cfg
-    )
+        logger.info("Dataset loaded: %d frames across runs.", len(df_can))
+        X_seq, X_stat, y, subtypes, run_ids, t_ends = build_window_dataset(
+            df_can, known_ids=KNOWN_IDS, cfg=cfg
+        )
+
     if len(y) == 0:
         raise RuntimeError("No windows generated from dataset!")
 
     test_split_pct = float(getattr(cfg.training, "test_split_pct", 25.0))
-    train_mask, test_mask = split_train_test_by_run(run_ids, test_split_pct=test_split_pct)
+    if is_hcrl:
+        logger.info("Splitting HCRL dataset by file and contiguous time block (never random frames)...")
+        train_mask, test_mask = split_train_test_by_time_block(run_ids, t_ends=t_ends, test_split_pct=test_split_pct)
+    else:
+        train_mask, test_mask = split_train_test_by_run(run_ids, test_split_pct=test_split_pct)
+
+    logger.info(
+        "Split: Train=%d windows (%.1f%%), Test=%d windows (%.1f%%).",
+        np.sum(train_mask),
+        100.0 * np.mean(train_mask),
+        np.sum(test_mask),
+        100.0 * np.mean(test_mask),
+    )
 
     # 3. Filter Normal Sequences
     normal_train_mask = train_mask & (y == "Normal")
@@ -405,15 +462,29 @@ def train_autoencoder(
     print(f"Attack Detection Rate:    {detection_rate * 100:.2f}% above normal threshold")
     print("-" * 70)
     print(f"Histogram Separation Ratio (Attack Mean / Normal Threshold): {att_mean / max(threshold, 1e-6):.2f}x")
+    print("=" * 70)
+    if is_hcrl:
+        print("\n>>> [NOTE: REAL HCRL CAR-HACKING DATASET (Hyundai YF Sonata) - AI LAYER EVALUATION ONLY] <<<\n")
+        print("Note: Deterministic rules and physics layers do not apply to this vehicle (different DBC/IDs).\n")
+    else:
+        print("\n>>> [NOTE: THESE ARE SIMULATOR-ONLY METRICS] <<<\n")
     print("=" * 70 + "\n")
 
     # 7. Save Model and Metadata
-    model_pt_path = output_models_dir / "anomaly_ae.pt"
-    meta_json_path = output_models_dir / "ae_metadata.json"
+    model_pt_path = output_models_dir / ("anomaly_ae_hcrl.pt" if is_hcrl else "anomaly_ae.pt")
+    meta_json_path = output_models_dir / ("ae_metadata_hcrl.json" if is_hcrl else "ae_metadata.json")
 
     torch.save(model.state_dict(), model_pt_path)
 
     ae_meta = {
+        "dataset": "REAL_HCRL (Hyundai YF Sonata)" if is_hcrl else "SYNTHETIC_SIMULATOR",
+        "is_hcrl": is_hcrl,
+        "rules_and_physics_applicable": not is_hcrl,
+        "note": (
+            "REAL HCRL Car-Hacking Dataset (Hyundai YF Sonata). Rules and physics layers do not apply due to vehicle DBC mismatch; AI layer evaluated."
+            if is_hcrl
+            else "SIMULATOR-ONLY EVALUATION"
+        ),
         "threshold": threshold,
         "mean_error": val_mean,
         "std_error": val_std,
@@ -428,6 +499,12 @@ def train_autoencoder(
         "created_at": time.time(),
     }
     with open(meta_json_path, "w", encoding="utf-8") as f:
+        json.dump(ae_meta, f, indent=2)
+
+    # Save metrics JSON
+    metrics_file = output_models_dir.parent / "metrics" / ("ae_metrics_hcrl.json" if is_hcrl else "ae_metrics.json")
+    metrics_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(metrics_file, "w", encoding="utf-8") as f:
         json.dump(ae_meta, f, indent=2)
 
     logger.info("Saved Autoencoder model to %s and metadata to %s", model_pt_path, meta_json_path)

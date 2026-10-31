@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import random
 import sys
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -56,6 +57,186 @@ def load_hcrl(path: Union[str, Path]) -> pd.DataFrame:
     # Read CSV
     df_raw = pd.read_csv(path)
     return clean_dataframe(df_raw)
+
+
+def load_hcrl_car_hacking(
+    path: Union[str, Path],
+    max_rows: Optional[int] = None,
+    chunk_size: int = 100000,
+    cfg: Optional[Any] = None,
+) -> pd.DataFrame:
+    """Load and standardize the HCRL Car-Hacking Dataset (Hyundai YF Sonata).
+
+    Row format in raw CSV:
+        Timestamp, CAN ID (hex), DLC, DATA[0..DLC-1] (hex), Flag (T=injected, R=regular)
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to CSV file (e.g. DoS_dataset.csv, Fuzzy_dataset.csv, gear_dataset.csv, RPM_dataset.csv).
+    max_rows : Optional[int]
+        Maximum rows to read. Defaults to cfg.training.hcrl_max_rows (500,000) so it fits in memory.
+    chunk_size : int
+        Number of rows to process per chunk.
+    cfg : Optional[Any]
+        Configuration object.
+
+    Returns
+    -------
+    pd.DataFrame
+        Standardized DataFrame with columns ['ts', 'arb_id', 'dlc', 'data', 'label', 'subtype', 'run_id'].
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"HCRL dataset file not found: {path}")
+
+    if cfg is None:
+        try:
+            cfg = load_config()
+        except Exception:
+            cfg = None
+
+    if max_rows is None:
+        train_cfg = getattr(cfg, "training", {}) if cfg else {}
+        max_rows = int(getattr(train_cfg, "hcrl_max_rows", 500000))
+    elif max_rows <= 0:
+        max_rows = None
+
+    filename_lower = path.name.lower()
+    if "dos" in filename_lower:
+        attack_label = "Flooding"
+        attack_subtype = ""
+    elif "fuzz" in filename_lower:
+        attack_label = "Fuzzing"
+        attack_subtype = ""
+    elif "gear" in filename_lower:
+        attack_label = "Spoofing"
+        attack_subtype = "spoof_gear"
+    elif "rpm" in filename_lower:
+        attack_label = "Spoofing"
+        attack_subtype = "spoof_rpm"
+    else:
+        attack_label = "Spoofing"
+        attack_subtype = ""
+
+    run_id = path.stem
+
+    ts_list: List[float] = []
+    arb_id_list: List[int] = []
+    dlc_list: List[int] = []
+    data_list: List[bytes] = []
+    label_list: List[str] = []
+    subtype_list: List[str] = []
+
+    rows_read = 0
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        while True:
+            lines = f.readlines(chunk_size * 80)
+            if not lines:
+                break
+
+            for line in lines:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+
+                parts = line_str.split(",")
+                # Defensively skip header if first column is non-numeric
+                try:
+                    ts = float(parts[0])
+                except ValueError:
+                    continue
+
+                if len(parts) < 4:
+                    continue
+
+                try:
+                    arb_id = int(parts[1], 16)
+                    dlc = int(parts[2])
+                    data_parts = parts[3:-1]
+                    raw_bytes = bytes(int(x, 16) for x in data_parts)
+                    if len(raw_bytes) < 8:
+                        raw_bytes = raw_bytes.ljust(8, b"\x00")
+                    elif len(raw_bytes) > 8:
+                        raw_bytes = raw_bytes[:8]
+
+                    flag = parts[-1].strip().upper()
+                    if flag == "T":
+                        lbl = attack_label
+                        sub = attack_subtype
+                    else:
+                        lbl = "Normal"
+                        sub = ""
+
+                    ts_list.append(ts)
+                    arb_id_list.append(arb_id)
+                    dlc_list.append(dlc)
+                    data_list.append(raw_bytes)
+                    label_list.append(lbl)
+                    subtype_list.append(sub)
+
+                    rows_read += 1
+                    if max_rows is not None and rows_read >= max_rows:
+                        break
+                except Exception:
+                    continue
+
+            if max_rows is not None and rows_read >= max_rows:
+                break
+
+    df = pd.DataFrame({
+        "ts": ts_list,
+        "arb_id": arb_id_list,
+        "dlc": dlc_list,
+        "data": data_list,
+        "label": label_list,
+        "subtype": subtype_list,
+        "run_id": run_id,
+    })
+
+    return df
+
+
+def load_all_hcrl(
+    raw_dir: Optional[Union[str, Path]] = None,
+    max_rows_per_file: Optional[int] = None,
+    cfg: Optional[Any] = None,
+) -> pd.DataFrame:
+    """Load all 4 HCRL Car-Hacking Dataset files from data/raw/."""
+    if cfg is None:
+        cfg = load_config()
+    paths_cfg = getattr(cfg, "paths", {})
+    raw_path = Path(raw_dir) if raw_dir else Path(paths_cfg.get("data_raw", "data/raw"))
+
+    target_files = [
+        "DoS_dataset.csv",
+        "Fuzzy_dataset.csv",
+        "gear_dataset.csv",
+        "RPM_dataset.csv",
+    ]
+
+    dfs: List[pd.DataFrame] = []
+    for fname in target_files:
+        fpath = raw_path / fname
+        if fpath.exists():
+            print(f"Loading HCRL file: {fpath.name} (max {max_rows_per_file or 'default'} rows)...")
+            df_file = load_hcrl_car_hacking(fpath, max_rows=max_rows_per_file, cfg=cfg)
+            dfs.append(df_file)
+        else:
+            print(f"Warning: HCRL file not found: {fpath}")
+
+    if not dfs:
+        # Fallback: check any csv in raw_path
+        for fpath in sorted(raw_path.glob("*.csv")):
+            print(f"Loading discovered CSV: {fpath.name}...")
+            df_file = load_hcrl_car_hacking(fpath, max_rows=max_rows_per_file, cfg=cfg)
+            dfs.append(df_file)
+
+    if not dfs:
+        raise FileNotFoundError(f"No HCRL Car-Hacking Dataset CSV files found in {raw_path}")
+
+    return pd.concat(dfs, ignore_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +536,39 @@ def split_train_test_by_run(
     return train_mask, test_mask
 
 
+def split_train_test_by_time_block(
+    run_ids: np.ndarray,
+    t_ends: Optional[np.ndarray] = None,
+    test_split_pct: float = 25.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Split window dataset into train and test masks by contiguous time blocks per file/run.
+
+    Guarantees no temporal data leakage: for each file/run, the initial (100 - test_split_pct)%
+    contiguous time block is used for training, and the final test_split_pct% contiguous block
+    is held out for testing. Never samples random frames.
+    """
+    n = len(run_ids)
+    train_mask = np.zeros(n, dtype=bool)
+    test_mask = np.zeros(n, dtype=bool)
+
+    for run_id in np.unique(run_ids):
+        indices = np.where(run_ids == run_id)[0]
+        if t_ends is not None:
+            # Sort indices chronologically within run
+            indices = indices[np.argsort(t_ends[indices])]
+        n_run = len(indices)
+        n_test = max(1, int(round(n_run * (test_split_pct / 100.0))))
+        split_idx = n_run - n_test
+
+        train_indices = indices[:split_idx]
+        test_indices = indices[split_idx:]
+
+        train_mask[train_indices] = True
+        test_mask[test_indices] = True
+
+    return train_mask, test_mask
+
+
 # ---------------------------------------------------------------------------
 # CLI Command Entrypoint
 # ---------------------------------------------------------------------------
@@ -363,14 +577,105 @@ def main() -> None:
     """CLI entrypoint for data generation and dataset verification."""
     parser = argparse.ArgumentParser(description="CAVShield Data Loader & Dataset Generator")
     parser.add_argument("--generate", action="store_true", help="Generate synthetic dataset and build windows")
+    parser.add_argument("--hcrl", action="store_true", help="Load HCRL Car-Hacking Dataset files, build windows with top 30 normal IDs, and save processed data")
+    parser.add_argument("--file", type=str, default=None, help="Specific HCRL file to load (defaults to all 4 files in data/raw/)")
+    parser.add_argument("--max-rows", type=int, default=None, help="Max rows per file (defaults to config hcrl_max_rows)")
     parser.add_argument("--quick", action="store_true", help="Run in quick mode with shortened durations")
     parser.add_argument("--output-dir", type=str, default=None, help="Directory to save generated datasets")
 
     args = parser.parse_args()
 
-    if args.generate:
+    cfg = load_config()
+
+    if args.hcrl:
+        print("=" * 70)
+        print("LOADING REAL-WORLD HCRL CAR-HACKING DATASET (Hyundai YF Sonata)")
+        print("=" * 70)
+
+        if args.file:
+            print(f"Loading single file: {args.file} (max_rows={args.max_rows})...")
+            df = load_hcrl_car_hacking(args.file, max_rows=args.max_rows, cfg=cfg)
+        else:
+            print("Loading all four HCRL dataset files from data/raw/...")
+            df = load_all_hcrl(max_rows_per_file=args.max_rows, cfg=cfg)
+
+        print("\n" + "=" * 70)
+        print("HCRL CAR-HACKING DATASET SUMMARY")
+        print("=" * 70)
+        print(f"Total Rows Loaded: {len(df):,}")
+        print("\nPer-Label Row Counts:")
+        label_counts = df["label"].value_counts()
+        for label, count in label_counts.items():
+            print(f"  {label:15s}: {count:8,d} ({count / len(df) * 100:5.1f}%)")
+
+        print("\nComputing known_ids = top 30 IDs of the normal rows...")
+        normal_df = df[df["label"] == "Normal"]
+        top_30_ids = normal_df["arb_id"].value_counts().nlargest(30).index.tolist()
+        top_30_ids = [int(x) for x in top_30_ids]
+        print(f"Top {len(top_30_ids)} Normal CAN IDs:")
+        print("  " + ", ".join(f"0x{x:03X}" for x in top_30_ids))
+
+        print("\nBuilding window dataset (window_size=64, stride=16)...")
+        t0 = time.time()
+        X_seq, X_stat, y, subtypes, run_ids, t_ends = build_window_dataset(
+            df, known_ids=top_30_ids, cfg=cfg
+        )
+        dt_win = time.time() - t0
+        print(f"Extracted {len(y):,} windows in {dt_win:.2f} s")
+
+        print("\n" + "=" * 70)
+        print("HCRL WINDOW DATASET SUMMARY")
+        print("=" * 70)
+        print(f"Total Windows: {len(y):,}")
+        print(f"X_seq Shape:   {X_seq.shape} (N, size, features)")
+        print(f"X_stat Shape:  {X_stat.shape} (N, stats)")
+        print("\nPer-Label Window Counts:")
+        window_counts = collections.Counter(y)
+        for label, count in window_counts.most_common():
+            print(f"  {label:15s}: {count:8,d} ({count / len(y) * 100:5.1f}%)")
+        print("=" * 70)
+
+        # Save processed data
+        paths_cfg = getattr(cfg, "paths", {})
+        proc_dir = Path(args.output_dir) if args.output_dir else Path(paths_cfg.get("data_processed", "data/processed"))
+        sample_dir = Path(paths_cfg.get("data_sample", "data/sample"))
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        sample_dir.mkdir(parents=True, exist_ok=True)
+
+        npz_path = proc_dir / "hcrl_windows.npz"
+        np.savez_compressed(
+            npz_path,
+            X_seq=X_seq,
+            X_stat=X_stat,
+            y=y,
+            subtypes=subtypes,
+            run_ids=run_ids,
+            t_ends=t_ends,
+            known_ids=np.array(top_30_ids, dtype=int),
+        )
+        print(f"Saved window dataset to: {npz_path} ({npz_path.stat().st_size / (1024 * 1024):.2f} MB)")
+
+        csv_path = proc_dir / "hcrl_can_dataset.csv.gz"
+        df_to_save = df.copy()
+        df_to_save["data"] = df_to_save["data"].apply(lambda b: b.hex() if isinstance(b, (bytes, bytearray)) else "")
+        df_to_save.to_csv(csv_path, index=False, compression="gzip")
+        print(f"Saved CAN dataset to:    {csv_path} ({csv_path.stat().st_size / (1024 * 1024):.2f} MB)")
+
+        marker_path = proc_dir / "REAL_HCRL.txt"
+        with open(marker_path, "w", encoding="utf-8") as f:
+            f.write("Real-World HCRL Car-Hacking Dataset (Hyundai YF Sonata)\n")
+            f.write(f"Total rows: {len(df):,}\n")
+            f.write(f"Top 30 Normal CAN IDs: {[hex(x) for x in top_30_ids]}\n")
+            f.write(f"Total windows: {len(y):,}\n")
+            f.write("Notice: Only AI models are evaluated on this dataset; deterministic rules/physics do not apply.\n")
+        print(f"Saved marker to:         {marker_path}")
+
+        sample_path = sample_dir / "sample_hcrl.csv"
+        df_to_save.head(500).to_csv(sample_path, index=False)
+        print(f"Saved 500-row sample to: {sample_path}")
+
+    elif args.generate:
         print("Generating synthetic CAN dataset using World digital twin simulation...")
-        cfg = load_config()
         df = generate_synthetic_dataset(cfg=cfg, output_dir=args.output_dir, quick=args.quick)
 
         print("\n" + "=" * 60)

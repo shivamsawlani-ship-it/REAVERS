@@ -101,6 +101,7 @@ training:
   attack_duration_s: 30
   test_split_pct: 25
   attack_window_fraction: 0.15
+  hcrl_max_rows: 500000
 
 attacks:
   flood:

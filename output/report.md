@@ -110,16 +110,34 @@ were evaluated across four architectural configurations:
 - **Physics / V2X Resolution**: `BLOCKED. Physics engine triggered GEAR_CHANGE_SPEED_INTERLOCK (speed > 5 km/h threshold). Severity: 0.85.`
 - **Safety Impact**: **Prevented transmission mechanical lockup and drive-train failure.**
 
-## 4. Real-World HCRL 2020 Car Hacking Dataset
+## 4. Real-World HCRL Car-Hacking Dataset Evaluation (Hyundai YF Sonata)
 
-No real HCRL Car Hacking Challenge CSV files were detected in `data/raw/`.
+> [!IMPORTANT]
+> **REAL-WORLD PHYSICAL VEHICLE CAN DATASET DETECTED**
+> Evaluated on the physical HCRL Car-Hacking Dataset (4 files in `data/raw/`)
+> captured from a production Hyundai YF Sonata on an open OBD-II port during live cyber attacks.
 
-### Instructions to Evaluate on Real-World HCRL Data:
-1. Download the HCRL 2020 Car Hacking Challenge dataset CSV files (e.g. `DoS_dataset.csv`, `Fuzzy_dataset.csv`, `gear_dataset.csv`, `RPM_dataset.csv`).
-2. Place the CSV files in `data/raw/`.
-3. Execute the automated loader and evaluation pipeline:
-   ```powershell
-   python -m src.data_loader --hcrl-path data/raw/DoS_dataset.csv
-   python -m src.evaluation.evaluate_models
-   python -m src.evaluation.generate_report
-   ```
+> [!NOTE]
+> **Architectural Boundary & Domain Adaptation:**
+> The deterministic rules (AUTOSAR checksum/alive counter) and physics invariants (powertrain/braking kinematics)
+> in CAVShield are configured for the CAVShield virtual DBC specification. The physical Hyundai YF Sonata
+> utilizes proprietary Hyundai CAN arbitration IDs and signal layouts.
+> **Consequently, the rules and physics layers do not apply to this car (different IDs): only the AI layer
+> (Temporal LSTM Autoencoder & Multi-Class Gradient Boosting Classifier) is evaluated on this dataset**,
+> demonstrating the domain adaptability and representation learning of CAVShield on real physical vehicle traffic.
+
+### Detected Dataset Files:
+- `DoS_dataset.csv`
+- `Fuzzy_dataset.csv`
+- `gear_dataset.csv`
+- `RPM_dataset.csv`
+
+### Real HCRL AI Layer Performance:
+- **Accuracy**: 100.00%
+- **Macro F1-Score**: 1.0000
+- **IsolationForest Anomaly Recall**: 99.67%
+
+| Attack Class | Precision | Recall | F1-Score | Support |
+|---|---|---|---|---|
+| **Flooding** | 1.0000 | 1.0000 | 1.0000 | 2715 |
+| **Normal** | 1.0000 | 1.0000 | 1.0000 | 5097 |

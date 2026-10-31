@@ -145,3 +145,36 @@ def test_hcrl_checker_function() -> None:
     assert "files" in res
     assert isinstance(res["files"], list)
 
+
+def test_hcrl_data_loader_and_temporal_split(tmp_path: Path) -> None:
+    """Verify HCRL CSV ingestion handles missing header, variable DLC, and time-block split."""
+    import numpy as np
+    from src.data_loader import load_hcrl_car_hacking, split_train_test_by_time_block
+
+    # Create dummy HCRL CSV without header: Timestamp, CAN ID (hex), DLC, DATA[0..7] (hex), Flag (R/T)
+    test_csv = tmp_path / "DoS_dataset.csv"
+    lines = [
+        "1478198376.123456,0130,8,11,22,33,44,55,66,77,88,R\n",
+        "1478198376.123500,0000,8,00,00,00,00,00,00,00,00,T\n",
+        "1478198376.123600,0140,4,AA,BB,CC,DD,R\n",  # DLC 4, padded to 8
+    ]
+    test_csv.write_text("".join(lines), encoding="utf-8")
+
+    df = load_hcrl_car_hacking(test_csv)
+    assert len(df) == 3
+    assert df["label"].iloc[0] == "Normal"
+    assert df["label"].iloc[1] == "Flooding"
+    assert df["label"].iloc[2] == "Normal"
+    assert df["dlc"].iloc[2] == 4
+    assert len(df["data"].iloc[2]) == 8
+
+    # Test time-block splitting
+    run_ids = np.array(["DoS_dataset.csv"] * 10)
+    t_ends = np.arange(10, dtype=float)
+    train_m, test_m = split_train_test_by_time_block(run_ids, t_ends, test_split_pct=30.0)
+    assert np.sum(train_m) == 7
+    assert np.sum(test_m) == 3
+    # Check that test set is strictly contiguous at the end of time
+    assert np.all(test_m[7:])
+
+
