@@ -251,10 +251,10 @@ class RiskEngine:
                 confidence=float(verdict.trust),
                 explanation="V2X message verified and trusted.",
                 action="forward",
-                components={"trust": verdict.trust, "accepted": True},
+                components={"trust": verdict.trust, "accepted": True, "status": "accepted"},
             )
 
-        # Rejected V2X message
+        # Rejected or Suspicious V2X message
         trust_deficit = max(0.0, 1.0 - verdict.trust)
         reasons_text = "; ".join(verdict.reasons) if verdict.reasons else "V2X trust threshold not met"
 
@@ -263,36 +263,42 @@ class RiskEngine:
         if "signature" in reasons_str:
             attack_type = "Spoofing"
             sev = 0.85
-        elif "ghost vehicle" in reasons_str or "phantom" in reasons_str or "unconfirmed" in reasons_str:
+        elif "ghost vehicle" in reasons_str or "phantom" in reasons_str or "obstacle" in reasons_str:
             attack_type = "Spoofing"  # Phantom obstacle spoofing
-            sev = 0.80
-        elif "kinematic" in reasons_str or "gps" in reasons_str:
+            sev = 0.85
+        elif "kinematic" in reasons_str or "gps" in reasons_str or "jump" in reasons_str:
             attack_type = "Spoofing"  # GPS teleportation / kinematic jump
-            sev = 0.75
+            sev = 0.85
         elif "freshness" in reasons_str or "replay" in reasons_str:
             attack_type = "Replay"
-            sev = 0.80
+            sev = 0.85
         else:
             attack_type = "Unknown anomaly"
-            sev = 0.65
+            sev = 0.70
 
-        score = float(min(1.0, 0.75 * sev + 0.25 * trust_deficit))
-
-        # Critical escalation if message asserted emergency deceleration or phantom road hazard
-        if msg.msg_type in ("EMERGENCY_BRAKING", "ROAD_HAZARD") and msg.claimed_decel > 2.0:
+        status_val = getattr(verdict, "status", "rejected" if not verdict.accepted else "accepted")
+        if status_val == "rejected" or not verdict.accepted:
             level = RiskLevel.HIGH
-        elif score >= self.th_high:
-            level = RiskLevel.HIGH
-        elif score >= self.th_medium:
+            score = max(self.th_high + 0.05, float(min(1.0, 0.75 * sev + 0.25 * max(0.5, trust_deficit))))
+            action_text = "reject unverified V2X"
+        elif status_val == "suspicious":
             level = RiskLevel.MEDIUM
+            score = max(self.th_medium + 0.05, float(min(1.0, 0.75 * sev + 0.25 * max(0.3, trust_deficit))))
+            action_text = "alert"
         else:
             level = RiskLevel.LOW
+            score = 0.0
+            action_text = "forward"
+
+        # Escalation if message asserted emergency deceleration or hazard warnings
+        if msg.msg_type in ("EMERGENCY_BRAKING", "ROAD_HAZARD", "COLLISION_WARNING") and (status_val == "rejected" or not verdict.accepted):
+            level = RiskLevel.HIGH
+            action_text = "reject unverified V2X"
 
         explanation = (
-            f"V2X {msg.msg_type} from {msg.sender_id} rejected (trust={verdict.trust:.2f}): {reasons_text}."
+            f"V2X {msg.msg_type} from {msg.sender_id} {status_val} (trust={verdict.trust:.2f}): {reasons_text}."
         )
-        action_text = "reject unverified V2X"
-        driver_action = "Unverified V2X advisory dropped. Continue standard vigilance."
+        driver_action = f"Unverified V2X {msg.msg_type} advisory dropped. Continue standard vigilance."
 
         return Decision(
             level=level,
@@ -304,6 +310,8 @@ class RiskEngine:
             components={
                 "trust": verdict.trust,
                 "reasons": verdict.reasons,
+                "status": status_val,
+                "accepted": verdict.accepted,
                 "driver_action": driver_action,
                 "sender_id": msg.sender_id,
                 "msg_type": msg.msg_type,

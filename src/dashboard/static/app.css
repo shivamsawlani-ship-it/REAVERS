@@ -830,6 +830,83 @@ table.soc-table tr:hover {
   gap: 12px;
 }
 
+.security-events-panel {
+  display: block;
+}
+
+.stream-filter-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.filter-chip {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 3px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.filter-chip:hover {
+  background: #253349;
+  color: var(--text-main);
+}
+
+.filter-chip.active {
+  background: var(--col-primary);
+  border-color: #6366f1;
+  color: #fff;
+  font-weight: 600;
+}
+
+.stream-badge {
+  background: rgba(239, 68, 68, 0.25);
+  color: #f87171;
+  border-radius: 9999px;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.repeat-badge {
+  display: inline-block;
+  margin-left: 5px;
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.domain-badge-can {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+.domain-badge-v2x {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
 /* Stream Row Styles */
 tr.row-blocked {
   background: rgba(239, 68, 68, 0.16) !important;

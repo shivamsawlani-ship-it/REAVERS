@@ -40,11 +40,14 @@ class V2XVerdict:
         List of explanations / rejection reasons.
     checks : Dict[str, Any]
         Sub-scores for signature, freshness, position, kinematics, and sensor.
+    status : str
+        Verification status: 'accepted' | 'suspicious' | 'rejected'.
     """
     accepted: bool
     trust: float
     reasons: List[str] = field(default_factory=list)
     checks: Dict[str, Any] = field(default_factory=dict)
+    status: str = "accepted"
 
 
 # ---------------------------------------------------------------------------
@@ -124,10 +127,7 @@ class V2XValidator:
             sig_score = 1.0
         else:
             sig_score = 0.0
-            reasons.append(
-                f"Cryptographic signature invalid or unverified for sender {msg.sender_id} "
-                f"(sig={msg.signature[:16]}...)"
-            )
+            reasons.append("Cryptographic signature verification failed")
 
         # -------------------------------------------------------------------
         # 2. Freshness & Anti-Replay Check (Weight: 0.15)
@@ -191,9 +191,9 @@ class V2XValidator:
 
                 if jump_m > jump_tol:
                     kin_score = 0.0
+                    dt_ms = max(1.0, dt_beacon * 1000.0)
                     reasons.append(
-                        f"Kinematic jump for {msg.sender_id}: position jumped {jump_m:.1f} m "
-                        f"over {dt_beacon*1000.0:.0f}ms (expected {expected_x:.1f} m, tol {jump_tol:.1f} m)"
+                        f"Claimed position jumped {jump_m:.1f} m in {dt_ms:.0f} ms (violates vehicle dynamics)"
                     )
 
         # -------------------------------------------------------------------
@@ -213,10 +213,7 @@ class V2XValidator:
                 )
                 if not matched_track:
                     sensor_score = 0.0
-                    reasons.append(
-                        f"Ghost vehicle: {msg.sender_id} claims position at distance {dist:.1f} m "
-                        f"but has no corresponding radar/lidar track"
-                    )
+                    reasons.append("Ghost vehicle: transmitter claims position within 80 m but has no matching radar/lidar track")
 
             # 5b. Hazard confirmation:
             # A claimed obstacle MUST be confirmed by a fused radar/lidar/camera track within 8 m
@@ -237,17 +234,12 @@ class V2XValidator:
                 if not matched_obs:
                     hazard_confirmed = False
                     sensor_score = 0.0
-                    reasons.append(
-                        f"Unverified hazard: claimed obstacle at range {obs_range:.1f} m has no "
-                        f"matching sensor track within 8 m (phantom hazard)"
-                    )
+                    reasons.append("Phantom hazard: claimed obstacle unconfirmed by radar/camera track within 8 m")
 
         # 5c. Emergency braking consistency
         if msg.msg_type == "EMERGENCY_BRAKING":
             if msg.claimed_decel > 8.0:
-                # Emergency braking claims > 8 m/s² should be verified by radar closing rate if nearby
                 if dist <= self.radar_cover_m and sensor_score > 0.0:
-                    # Closing rate check
                     pass
 
         # -------------------------------------------------------------------
@@ -263,22 +255,29 @@ class V2XValidator:
         )
         trust = round(max(0.0, min(1.0, trust)), 3)
 
-        # Acceptance Decision:
-        # Accept only if signature is valid, fresh, kinematically consistent,
-        # within plausible boundaries, trust >= trust_accept, and (for hazard types) sensor-confirmed.
+        # Determine status: accepted | suspicious | rejected
         hazard_condition = hazard_confirmed if is_hazard else True
-        accepted = (
-            (sig_score == 1.0)
-            and (fresh_score > 0.0)
-            and (kin_score == 1.0)
-            and (pos_score == 1.0)
-            and (sensor_score == 1.0)
-            and (trust >= self.trust_accept)
-            and hazard_condition
+        hard_failures = (
+            (sig_score == 0.0)
+            or (not hazard_condition)
+            or (sensor_score == 0.0)
+            or (kin_score == 0.0)
+            or (pos_score == 0.0)
+            or (fresh_score == 0.0 and any("replay" in r.lower() or "stale" in r.lower() for r in reasons))
         )
 
+        if hard_failures:
+            status = "rejected"
+            accepted = False
+        elif trust < self.trust_accept or reasons:
+            status = "suspicious"
+            accepted = False
+        else:
+            status = "accepted"
+            accepted = True
+
         # Update beacon history for valid senders
-        if is_sig_valid and kin_score == 1.0:
+        if is_sig_valid and kin_score == 1.0 and pos_score == 1.0:
             self._beacon_history[msg.sender_id] = (msg.timestamp, msg.x, msg.y, msg.speed)
 
         return V2XVerdict(
@@ -293,4 +292,5 @@ class V2XValidator:
                 "sensor": sensor_score,
                 "hazard_confirmed": hazard_confirmed,
             },
+            status=status,
         )

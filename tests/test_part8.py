@@ -145,13 +145,19 @@ def test_contrast_protection_off() -> None:
 
         # Inject spoof_brake attack with protection OFF
         engine.inject("spoof_brake", duration=2.0)
-        # Inspect while attack is actively running
-        time.sleep(0.8)
+        # Inspect while attack is actively running (poll up to 2.5s for actuator lag and scheduler jitter)
+        applied = False
+        t_deadline = time.time() + 2.5
+        while time.time() < t_deadline:
+            snap = engine.snapshot()
+            if snap["twin"]["applied_decel"] > 2.0 or snap["twin"]["unsafe_seconds"] > 0.0:
+                applied = True
+                break
+            time.sleep(0.05)
 
-        snap = engine.snapshot()
         # Since protection was OFF, frames were forwarded to twin
         # Twin must register applied decel > 2.0 m/s² and unsafe condition
-        assert snap["twin"]["applied_decel"] > 2.0 or snap["twin"]["unsafe_seconds"] > 0.0, "Unprotected twin failed to experience unintended braking!"
+        assert applied, "Unprotected twin failed to experience unintended braking!"
 
     finally:
         engine.stop()

@@ -310,9 +310,14 @@ class CAVShieldEngine:
         self.gateway_bus = create_bus(cfg)
         self.v2x_queue: queue.Queue[V2XMessage] = queue.Queue()
 
-        # Telemetry Buffers for Snapshot (CONTRACT item 11)
-        self.recent_can: Deque[Dict[str, Any]] = collections.deque(maxlen=12)
-        self.recent_v2x: Deque[Dict[str, Any]] = collections.deque(maxlen=10)
+        # Telemetry Buffers for Snapshot (CONTRACT item 11 + Dual Ring Buffers)
+        self.recent_can: Deque[Dict[str, Any]] = collections.deque(maxlen=200)
+        self.recent_can_live: Deque[Dict[str, Any]] = collections.deque(maxlen=20)
+        self.flagged_can: Deque[Dict[str, Any]] = collections.deque(maxlen=200)
+        self.recent_v2x: Deque[Dict[str, Any]] = collections.deque(maxlen=100)
+        self.recent_v2x_live: Deque[Dict[str, Any]] = collections.deque(maxlen=20)
+        self.flagged_v2x: Deque[Dict[str, Any]] = collections.deque(maxlen=100)
+        self.last_sim_time: float = 0.0
         self.latest_decision: Optional[Decision] = None
         self.metrics = MetricsTracker()
 
@@ -410,7 +415,12 @@ class CAVShieldEngine:
             self.failsafe = FailSafeManager(cfg=self.cfg)
             self.metrics = MetricsTracker()
             self.recent_can.clear()
+            self.recent_can_live.clear()
+            self.flagged_can.clear()
             self.recent_v2x.clear()
+            self.recent_v2x_live.clear()
+            self.flagged_v2x.clear()
+            self.last_sim_time = 0.0
             self.score_history.clear()
             self.attack_markers.clear()
             self.latest_decision = None
@@ -510,6 +520,7 @@ class CAVShieldEngine:
                 attack_injected = True
 
             # 1. Step world simulation
+            self.last_sim_time = t
             can_frames, v2x_msgs = self.world.step(now=t, dt=dt, apply_to_twin=False)
 
             # Update sensors
@@ -519,94 +530,114 @@ class CAVShieldEngine:
 
             # 2. Process CAN frames through gateway fast-path
             for frame in can_frames:
-                # Update features & sliding window
-                feat_vec = self.feature_extractor.extract(frame.arb_id, frame.data, frame.timestamp, frame.dlc)
-                full_window = self.windower.push(
-                    vec=feat_vec,
-                    ts=frame.timestamp,
-                    label=frame.label,
-                    subtype=frame.subtype,
-                    raw_id=frame.arb_id,
-                    raw_payload=frame.data,
-                )
-                if full_window is not None:
-                    # Score window synchronously in headless mode
-                    anomaly_res = self.anomaly_detector.score(full_window)
-                    stat_vec = window_stat_features(full_window, known_ids=KNOWN_IDS)
-                    clf_res = self.attack_classifier.predict(stat_vec, anomaly_score=anomaly_res.normalized)
-                    self.ai_context = AIContext(
-                        anomaly=anomaly_res.normalized,
-                        attack_prob=clf_res.attack_prob,
-                        label=clf_res.label,
-                        confidence=clf_res.confidence,
-                        probs=clf_res.probs,
-                        t=frame.timestamp,
-                        available=(self.anomaly_detector.available or self.attack_classifier.available),
-                    )
-
-                # Gate check
-                if not self.failsafe.gate(frame, now=frame.timestamp):
-                    self.metrics.record_frame(frame.label, is_positive_decision=True, detection_latency_ms=0.03)
-                    self._record_can_snapshot(frame, verdict="blocked", reason="Quarantined or rate-limited")
-                    continue
-
-                # Deterministic rules
-                rule_evidences = self.rule_engine.evaluate(frame)
-
-                # Physics invariants
                 try:
-                    decoded = decode(frame.arb_id, frame.data)
-                except Exception:
-                    decoded = None
-                phys_evidences = self.physics_engine.check(frame, decoded)
+                    # Update features & sliding window
+                    feat_vec = self.feature_extractor.extract(frame.arb_id, frame.data, frame.timestamp, frame.dlc)
+                    full_window = self.windower.push(
+                        vec=feat_vec,
+                        ts=frame.timestamp,
+                        label=frame.label,
+                        subtype=frame.subtype,
+                        raw_id=frame.arb_id,
+                        raw_payload=frame.data,
+                    )
+                    if full_window is not None:
+                        # Score window synchronously in headless mode
+                        anomaly_res = self.anomaly_detector.score(full_window)
+                        stat_vec = window_stat_features(full_window, known_ids=KNOWN_IDS)
+                        clf_res = self.attack_classifier.predict(stat_vec, anomaly_score=anomaly_res.normalized)
+                        self.ai_context = AIContext(
+                            anomaly=anomaly_res.normalized,
+                            attack_prob=clf_res.attack_prob,
+                            label=clf_res.label,
+                            confidence=clf_res.confidence,
+                            probs=clf_res.probs,
+                            t=frame.timestamp,
+                            available=(self.anomaly_detector.available or self.attack_classifier.available),
+                        )
 
-                # Multi-source risk fusion
-                decision = self.risk_engine.fuse_can(
-                    frame=frame,
-                    evidences=rule_evidences + phys_evidences,
-                    ai_ctx=self.ai_context,
-                    now=frame.timestamp,
-                )
-                self.latest_decision = decision
+                    # Gate check
+                    if not self.failsafe.gate(frame, now=frame.timestamp):
+                        self.metrics.record_frame(frame.label, is_positive_decision=True, detection_latency_ms=0.03)
+                        self._record_can_snapshot(frame, verdict="blocked", reason="Quarantined or rate-limited", now=frame.timestamp)
+                        continue
 
-                # Fail-safe enforcement
-                forward, actions = self.failsafe.enforce(decision, frame, now=frame.timestamp)
+                    # Deterministic rules
+                    rule_evidences = self.rule_engine.evaluate(frame)
 
-                is_positive = (not forward) or (decision.level >= RiskLevel.HIGH)
-                self.metrics.record_frame(frame.label, is_positive_decision=is_positive, detection_latency_ms=0.035)
+                    # Physics invariants
+                    try:
+                        decoded = decode(frame.arb_id, frame.data)
+                    except Exception:
+                        decoded = None
+                    phys_evidences = self.physics_engine.check(frame, decoded)
 
-                if forward:
-                    self.rule_engine.commit(frame)
-                    self.physics_engine.update(frame, decoded)
-                    if frame.arb_id in COMMAND_IDS:
-                        self.world.twin.accept_command(frame.arb_id, decoded, t)
-                    elif frame.arb_id in KNOWN_IDS:
-                        self.world.twin.accept_status(frame.arb_id, decoded)
-                    verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
-                else:
-                    verdict_str = "blocked"
+                    # Multi-source risk fusion
+                    decision = self.risk_engine.fuse_can(
+                        frame=frame,
+                        evidences=rule_evidences + phys_evidences,
+                        ai_ctx=self.ai_context,
+                        now=frame.timestamp,
+                    )
+                    self.latest_decision = decision
 
-                self._record_can_snapshot(frame, verdict=verdict_str, reason=decision.explanation)
+                    # Fail-safe enforcement
+                    forward, actions = self.failsafe.enforce(decision, frame, now=frame.timestamp)
+
+                    is_positive = (not forward) or (decision.level >= RiskLevel.HIGH)
+                    self.metrics.record_frame(frame.label, is_positive_decision=is_positive, detection_latency_ms=0.035)
+
+                    if forward:
+                        self.rule_engine.commit(frame)
+                        self.physics_engine.update(frame, decoded)
+                        if frame.arb_id in COMMAND_IDS:
+                            self.world.twin.accept_command(frame.arb_id, decoded, t)
+                        elif frame.arb_id in KNOWN_IDS:
+                            self.world.twin.accept_status(frame.arb_id, decoded)
+                        verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
+                    else:
+                        verdict_str = "blocked"
+
+                    self._record_can_snapshot(frame, verdict=verdict_str, reason=decision.explanation, now=frame.timestamp)
+
+                except Exception as exc:
+                    logger.exception("Error during headless CAN evaluation: %s", exc)
+                    self._record_can_snapshot(
+                        frame,
+                        verdict="suspicious",
+                        reason=f"validation error: {type(exc).__name__}: {exc}",
+                        now=frame.timestamp,
+                    )
 
             # 3. Process V2X messages
             for v2x_msg in v2x_msgs:
-                verdict = self.v2x_validator.validate(v2x_msg, now=v2x_msg.timestamp)
-                v2x_dec = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=v2x_msg.timestamp)
-                accepted = self.failsafe.enforce_v2x(v2x_dec, v2x_msg, now=v2x_msg.timestamp)
-                if accepted and v2x_msg.obstacle is not None:
-                    with self._world_lock:
-                        self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
-                status_str = "accepted" if accepted else "rejected"
-                reason_str = "; ".join(verdict.reasons) if verdict.reasons else "Verified"
-                with self._snapshot_lock:
-                    self.recent_v2x.appendleft({
-                        "ts": round(v2x_msg.timestamp, 3),
-                        "sender": v2x_msg.sender_id,
-                        "type": v2x_msg.msg_type,
-                        "trust": round(verdict.trust, 2),
-                        "status": status_str,
-                        "reason": reason_str,
-                    })
+                try:
+                    verdict = self.v2x_validator.validate(v2x_msg, now=v2x_msg.timestamp)
+                    v2x_dec = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=v2x_msg.timestamp)
+                    accepted = self.failsafe.enforce_v2x(v2x_dec, v2x_msg, now=v2x_msg.timestamp)
+                    if accepted and v2x_msg.obstacle is not None:
+                        with self._world_lock:
+                            self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
+
+                    status_str = getattr(verdict, "status", "accepted" if accepted else "rejected")
+                    if not accepted and status_str == "accepted":
+                        status_str = "rejected"
+                    reason_str = "; ".join(verdict.reasons) if verdict.reasons else "Verified"
+                    trust_val = verdict.trust
+
+                except Exception as exc:
+                    logger.exception("Error during headless V2X validation: %s", exc)
+                    status_str = "suspicious"
+                    reason_str = f"validation error: {type(exc).__name__}: {exc}"
+                    trust_val = 0.0
+
+                self._record_v2x_snapshot(
+                    msg=v2x_msg,
+                    status=status_str,
+                    trust=trust_val,
+                    reason=reason_str,
+                    now=v2x_msg.timestamp,
+                )
 
             # Update auto-recovery timers
             self.failsafe.update_mode(t)
@@ -672,98 +703,112 @@ class CAVShieldEngine:
             try:
                 # 1. Read batch of CAN messages from gateway bus
                 raw_frames: List[CANFrame] = []
-                while len(raw_frames) < batch_limit:
-                    msg = self.gateway_bus.recv(timeout=0.003)
-                    if msg is None:
-                        break
+                msg = self.gateway_bus.recv(timeout=0.002)
+                if msg is not None:
                     frame = message_to_frame(msg)
                     if frame is not None:
                         raw_frames.append(frame)
+                    while len(raw_frames) < batch_limit:
+                        msg = self.gateway_bus.recv(timeout=0.0)
+                        if msg is None:
+                            break
+                        frame = message_to_frame(msg)
+                        if frame is not None:
+                            raw_frames.append(frame)
 
                 # 2. Prioritize safety-critical frames when queue backlog grows
                 prioritized_frames = self.failsafe.prioritize_queue(raw_frames)
 
                 # 3. Process CAN Frames through Fast Path
                 now = time.perf_counter() - self.uptime_start
+                self.last_sim_time = now
                 for frame in prioritized_frames:
                     t_start_proc = time.perf_counter()
-
-                    # Push frame features to sliding window
-                    feat_vec = self.feature_extractor.extract(
-                        arb_id=frame.arb_id,
-                        data=frame.data,
-                        ts=frame.timestamp,
-                        dlc=frame.dlc,
-                    )
-                    full_window = self.windower.push(
-                        vec=feat_vec,
-                        ts=frame.timestamp,
-                        label=frame.label,
-                        subtype=frame.subtype,
-                        raw_id=frame.arb_id,
-                        raw_payload=frame.data,
-                    )
-                    if full_window is not None:
-                        try:
-                            self.ai_queue.put_nowait((full_window, frame.timestamp))
-                        except queue.Full:
-                            pass
-
-                    # --- FAST PATH: Gate -> Rules -> Physics -> Fuse -> Enforce ---
-                    # 1. Gateway pass check
-                    if not self.failsafe.gate(frame, now=frame.timestamp):
-                        # Dropped by rate-limiter or quarantine
-                        is_attack = frame.label != "Normal"
-                        det_latency = (time.perf_counter() - t_start_proc) * 1000.0
-                        self.metrics.record_frame(frame.label, is_positive_decision=True, detection_latency_ms=det_latency)
-                        self._record_can_snapshot(frame, verdict="blocked", reason="Quarantined or rate-limited")
-                        continue
-
-                    # 2. Deterministic Rule Engine
-                    rule_evidences = self.rule_engine.evaluate(frame)
-
-                    # 3. Physics Invariant Engine
                     try:
-                        decoded = decode(frame.arb_id, frame.data)
-                    except Exception:
-                        decoded = None
-                    phys_evidences = self.physics_engine.check(frame, decoded)
+                        # Push frame features to sliding window
+                        feat_vec = self.feature_extractor.extract(
+                            arb_id=frame.arb_id,
+                            data=frame.data,
+                            ts=frame.timestamp,
+                            dlc=frame.dlc,
+                        )
+                        full_window = self.windower.push(
+                            vec=feat_vec,
+                            ts=frame.timestamp,
+                            label=frame.label,
+                            subtype=frame.subtype,
+                            raw_id=frame.arb_id,
+                            raw_payload=frame.data,
+                        )
+                        if full_window is not None:
+                            try:
+                                self.ai_queue.put_nowait((full_window, frame.timestamp))
+                            except queue.Full:
+                                pass
 
-                    all_evidences = rule_evidences + phys_evidences
+                        # --- FAST PATH: Gate -> Rules -> Physics -> Fuse -> Enforce ---
+                        # 1. Gateway pass check
+                        if not self.failsafe.gate(frame, now=frame.timestamp):
+                            # Dropped by rate-limiter or quarantine
+                            det_latency = (time.perf_counter() - t_start_proc) * 1000.0
+                            self.metrics.record_frame(frame.label, is_positive_decision=True, detection_latency_ms=det_latency)
+                            self._record_can_snapshot(frame, verdict="blocked", reason="Quarantined or rate-limited", now=frame.timestamp)
+                            continue
 
-                    # 4. Multi-Source Risk Fusion
-                    decision = self.risk_engine.fuse_can(
-                        frame=frame,
-                        evidences=all_evidences,
-                        ai_ctx=self.ai_context,
-                        now=frame.timestamp,
-                    )
-                    self.latest_decision = decision
+                        # 2. Deterministic Rule Engine
+                        rule_evidences = self.rule_engine.evaluate(frame)
 
-                    # 5. Fail-Safe Enforcement
-                    forward, actions = self.failsafe.enforce(decision, frame, now=frame.timestamp)
+                        # 3. Physics Invariant Engine
+                        try:
+                            decoded = decode(frame.arb_id, frame.data)
+                        except Exception:
+                            decoded = None
+                        phys_evidences = self.physics_engine.check(frame, decoded)
 
-                    # Record metrics (positive = dropped, blocked, or HIGH/CRITICAL alert)
-                    is_positive = (not forward) or (decision.level >= RiskLevel.HIGH)
-                    proc_latency_ms = (time.perf_counter() - t_start_proc) * 1000.0
-                    self.metrics.record_frame(frame.label, is_positive_decision=is_positive, detection_latency_ms=proc_latency_ms)
+                        all_evidences = rule_evidences + phys_evidences
 
-                    # 6. Forwarded Frame Actuation
-                    if forward:
-                        self.rule_engine.commit(frame)
-                        self.physics_engine.update(frame, decoded)
+                        # 4. Multi-Source Risk Fusion
+                        decision = self.risk_engine.fuse_can(
+                            frame=frame,
+                            evidences=all_evidences,
+                            ai_ctx=self.ai_context,
+                            now=frame.timestamp,
+                        )
+                        self.latest_decision = decision
 
-                        with self._world_lock:
-                            if frame.arb_id in COMMAND_IDS:
-                                self.world.twin.accept_command(frame.arb_id, decoded, now)
-                            elif frame.arb_id in KNOWN_IDS:
-                                self.world.twin.accept_status(frame.arb_id, decoded)
+                        # 5. Fail-Safe Enforcement
+                        forward, actions = self.failsafe.enforce(decision, frame, now=frame.timestamp)
 
-                        verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
-                    else:
-                        verdict_str = "blocked"
+                        # Record metrics (positive = dropped, blocked, or HIGH/CRITICAL alert)
+                        is_positive = (not forward) or (decision.level >= RiskLevel.HIGH)
+                        proc_latency_ms = (time.perf_counter() - t_start_proc) * 1000.0
+                        self.metrics.record_frame(frame.label, is_positive_decision=is_positive, detection_latency_ms=proc_latency_ms)
 
-                    self._record_can_snapshot(frame, verdict=verdict_str, reason=decision.explanation)
+                        # 6. Forwarded Frame Actuation
+                        if forward:
+                            self.rule_engine.commit(frame)
+                            self.physics_engine.update(frame, decoded)
+
+                            with self._world_lock:
+                                if frame.arb_id in COMMAND_IDS:
+                                    self.world.twin.accept_command(frame.arb_id, decoded, now)
+                                elif frame.arb_id in KNOWN_IDS:
+                                    self.world.twin.accept_status(frame.arb_id, decoded)
+
+                            verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
+                        else:
+                            verdict_str = "blocked"
+
+                        self._record_can_snapshot(frame, verdict=verdict_str, reason=decision.explanation, now=frame.timestamp)
+
+                    except Exception as exc:
+                        logger.exception("Error during CAN fast-path evaluation: %s", exc)
+                        self._record_can_snapshot(
+                            frame,
+                            verdict="suspicious",
+                            reason=f"validation error: {type(exc).__name__}: {exc}",
+                            now=frame.timestamp,
+                        )
 
                 # 4. Process V2X Messages
                 self._process_v2x_queue(now)
@@ -781,38 +826,128 @@ class CAVShieldEngine:
                 break
             v2x_count += 1
 
-            verdict = self.v2x_validator.validate(v2x_msg, now=v2x_msg.timestamp)
-            decision = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=v2x_msg.timestamp)
-            accepted = self.failsafe.enforce_v2x(decision, v2x_msg, now=v2x_msg.timestamp)
+            try:
+                verdict = self.v2x_validator.validate(v2x_msg, now=v2x_msg.timestamp)
+                decision = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=v2x_msg.timestamp)
+                accepted = self.failsafe.enforce_v2x(decision, v2x_msg, now=v2x_msg.timestamp)
 
-            if accepted and v2x_msg.obstacle is not None:
-                with self._world_lock:
-                    self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
+                if accepted and v2x_msg.obstacle is not None:
+                    with self._world_lock:
+                        self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
 
-            status_str = "accepted" if accepted else "rejected"
-            reason_str = "; ".join(verdict.reasons) if verdict.reasons else "Verified"
-            with self._snapshot_lock:
-                self.recent_v2x.appendleft({
-                    "ts": round(v2x_msg.timestamp, 3),
-                    "sender": v2x_msg.sender_id,
-                    "type": v2x_msg.msg_type,
-                    "trust": round(verdict.trust, 2),
-                    "status": status_str,
-                    "reason": reason_str,
-                })
+                status_str = getattr(verdict, "status", "accepted" if accepted else "rejected")
+                if not accepted and status_str == "accepted":
+                    status_str = "rejected"
+                reason_str = "; ".join(verdict.reasons) if verdict.reasons else "Verified"
+                trust_val = verdict.trust
 
-    def _record_can_snapshot(self, frame: CANFrame, verdict: str, reason: str) -> None:
-        """Record CAN frame into recent snapshot buffer."""
+            except Exception as exc:
+                logger.exception("Error during V2X validation: %s", exc)
+                status_str = "suspicious"
+                reason_str = f"validation error: {type(exc).__name__}: {exc}"
+                trust_val = 0.0
+
+            self._record_v2x_snapshot(
+                msg=v2x_msg,
+                status=status_str,
+                trust=trust_val,
+                reason=reason_str,
+                now=v2x_msg.timestamp,
+            )
+
+    def _record_can_snapshot(self, frame: CANFrame, verdict: str, reason: str, now: Optional[float] = None) -> None:
+        """Record CAN frame into live and flagged buffers with repeat-count aggregation."""
+        ts_val = frame.timestamp if now is None else now
         with self._snapshot_lock:
-            self.recent_can.appendleft({
-                "ts": round(frame.timestamp, 4),
+            entry = {
+                "ts": round(ts_val, 4),
+                "raw_ts": ts_val,
                 "id": f"0x{frame.arb_id:03X}",
                 "dlc": frame.dlc,
                 "data": frame.data.hex(),
                 "sender": frame.sender,
                 "verdict": verdict,
                 "reason": reason,
-            })
+                "count": 1,
+            }
+            self.recent_can_live.appendleft(entry)
+
+            is_flagged = (verdict in ("blocked", "suspicious")) or (getattr(frame, "label", "Normal") != "Normal")
+            if is_flagged:
+                arb_str = f"0x{frame.arb_id:03X}"
+                if (
+                    self.flagged_can
+                    and self.flagged_can[0]["id"] == arb_str
+                    and self.flagged_can[0]["verdict"] == verdict
+                    and self.flagged_can[0]["reason"] == reason
+                ):
+                    self.flagged_can[0]["count"] = self.flagged_can[0].get("count", 1) + 1
+                    self.flagged_can[0]["ts"] = round(ts_val, 4)
+                    self.flagged_can[0]["raw_ts"] = ts_val
+                    self.flagged_can[0]["data"] = frame.data.hex()
+                else:
+                    self.flagged_can.appendleft({
+                        "ts": round(ts_val, 4),
+                        "raw_ts": ts_val,
+                        "id": arb_str,
+                        "dlc": frame.dlc,
+                        "data": frame.data.hex(),
+                        "sender": frame.sender,
+                        "verdict": verdict,
+                        "reason": reason,
+                        "count": 1,
+                    })
+
+            self.recent_can.appendleft(entry)
+
+    def _record_v2x_snapshot(
+        self,
+        msg: V2XMessage,
+        status: str,
+        trust: float,
+        reason: str,
+        now: Optional[float] = None,
+    ) -> None:
+        """Record V2X message into live and flagged buffers with repeat-count aggregation."""
+        ts_val = msg.timestamp if now is None else now
+        with self._snapshot_lock:
+            entry = {
+                "ts": round(ts_val, 3),
+                "raw_ts": ts_val,
+                "sender": msg.sender_id,
+                "type": msg.msg_type,
+                "trust": round(trust, 2),
+                "status": status,
+                "reason": reason,
+                "count": 1,
+            }
+            self.recent_v2x_live.appendleft(entry)
+
+            is_flagged = (status in ("rejected", "suspicious")) or (getattr(msg, "label", "Normal") != "Normal")
+            if is_flagged:
+                if (
+                    self.flagged_v2x
+                    and self.flagged_v2x[0]["sender"] == msg.sender_id
+                    and self.flagged_v2x[0]["status"] == status
+                    and self.flagged_v2x[0]["reason"] == reason
+                ):
+                    self.flagged_v2x[0]["count"] = self.flagged_v2x[0].get("count", 1) + 1
+                    self.flagged_v2x[0]["ts"] = round(ts_val, 3)
+                    self.flagged_v2x[0]["raw_ts"] = ts_val
+                    self.flagged_v2x[0]["trust"] = round(trust, 2)
+                else:
+                    self.flagged_v2x.appendleft({
+                        "ts": round(ts_val, 3),
+                        "raw_ts": ts_val,
+                        "sender": msg.sender_id,
+                        "type": msg.msg_type,
+                        "trust": round(trust, 2),
+                        "status": status,
+                        "reason": reason,
+                        "count": 1,
+                    })
+
+            self.recent_v2x.appendleft(entry)
 
     # -----------------------------------------------------------------------
     # Thread 3: Asynchronous AI Worker Loop
@@ -950,9 +1085,62 @@ class CAVShieldEngine:
 
         All data fields are deep copies under a lock; never blocks pipeline execution.
         """
-        now = time.perf_counter() - self.uptime_start
+        now = self.last_sim_time if self.last_sim_time > 0 else (time.perf_counter() - self.uptime_start)
+        cutoff_time = now - 8.0
 
         with self._world_lock, self._snapshot_lock:
+            # Time-based retention pruning (O(1) amortized from oldest at right)
+            while self.flagged_can and self.flagged_can[-1]["raw_ts"] < cutoff_time:
+                self.flagged_can.pop()
+
+            while self.flagged_v2x and self.flagged_v2x[-1]["raw_ts"] < cutoff_time:
+                self.flagged_v2x.pop()
+
+            # CAN Stream: union of flagged (persisting >= 8s) + recent live frames
+            can_rows = list(self.flagged_can)
+            seen_can = {(r["id"], r["ts"]) for r in can_rows}
+            for r in self.recent_can_live:
+                if (r["id"], r["ts"]) not in seen_can:
+                    can_rows.append(r)
+                    if len(can_rows) >= 30:
+                        break
+
+            # V2X Stream: flagged rows FIRST (pinned 8s), followed by recent live rows
+            v2x_rows = list(self.flagged_v2x)
+            seen_v2x = {(r["sender"], r["ts"]) for r in v2x_rows}
+            for r in self.recent_v2x_live:
+                if (r["sender"], r["ts"]) not in seen_v2x:
+                    v2x_rows.append(r)
+                    if len(v2x_rows) >= 20:
+                        break
+
+            # Security Events Feed: last 20 flagged CAN and V2X events tagged [CAN] or [V2X]
+            sec_events: List[Dict[str, Any]] = []
+            for c in self.flagged_can:
+                sec_events.append({
+                    "domain": "CAN",
+                    "ts": c["ts"],
+                    "raw_ts": c["raw_ts"],
+                    "id": c["id"],
+                    "sender": c["sender"],
+                    "verdict": c["verdict"],
+                    "reason": c["reason"],
+                    "count": c.get("count", 1),
+                })
+            for v in self.flagged_v2x:
+                sec_events.append({
+                    "domain": "V2X",
+                    "ts": v["ts"],
+                    "raw_ts": v["raw_ts"],
+                    "id": v["sender"],
+                    "sender": v["sender"],
+                    "verdict": v["status"],
+                    "reason": v["reason"],
+                    "count": v.get("count", 1),
+                })
+            sec_events.sort(key=lambda x: x["raw_ts"], reverse=True)
+            sec_events = sec_events[:20]
+
             # 1. Twin plant state
             twin_st = self.world.twin.state
             perceived_st = self.world.twin.perceived
@@ -1037,8 +1225,11 @@ class CAVShieldEngine:
                 "threat": threat_dict,
                 "scores": list(self.score_history),
                 "attack_markers": list(self.attack_markers),
-                "can": list(self.recent_can),
-                "v2x": list(self.recent_v2x),
+                "can": can_rows,
+                "v2x": v2x_rows,
+                "security_events": sec_events,
+                "can_flagged_count": len(self.flagged_can),
+                "v2x_flagged_count": len(self.flagged_v2x),
                 "failsafe": fs_dict,
                 "incidents": incidents_list,
                 "metrics": metrics_dict,

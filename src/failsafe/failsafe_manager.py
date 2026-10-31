@@ -431,7 +431,15 @@ class FailSafeManager:
         with self._lock:
             self.update_mode(curr_time)
 
-            if decision.level >= RiskLevel.HIGH:
+            status_val = decision.components.get("status", "")
+            is_rejected = (
+                decision.level >= RiskLevel.HIGH
+                or decision.action.startswith("reject")
+                or decision.action.startswith("drop")
+                or status_val == "rejected"
+            )
+
+            if is_rejected:
                 self.rejected_v2x_count += 1
                 act = f"Rejected unverified V2X {msg.msg_type} from {msg.sender_id}"
                 self.recent_actions.append(act)

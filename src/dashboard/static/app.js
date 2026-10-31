@@ -38,9 +38,13 @@
       incidents: "",
       can: "",
       v2x: "",
+      securityEvents: "",
       metrics: "",
       demo: "",
     },
+    canFilter: "all",
+    v2xFilter: "all",
+    lastSnapshot: null,
     lastChartRenderTime: 0,
     plotlyInitialized: false,
   };
@@ -125,9 +129,19 @@
     actionsList: document.getElementById("actionsList"),
     incidentsTbody: document.querySelector("#incidentsTable tbody"),
 
-    // Streams
+    // Streams & Filters
     canTbody: document.querySelector("#canTable tbody"),
     v2xTbody: document.querySelector("#v2xTable tbody"),
+    canFlaggedBadge: document.getElementById("canFlaggedBadge"),
+    v2xFlaggedBadge: document.getElementById("v2xFlaggedBadge"),
+    canFilterAll: document.getElementById("canFilterAll"),
+    canFilterFlagged: document.getElementById("canFilterFlagged"),
+    v2xFilterAll: document.getElementById("v2xFilterAll"),
+    v2xFilterFlagged: document.getElementById("v2xFilterFlagged"),
+
+    // Security Events Feed
+    secEventsCount: document.getElementById("secEventsCount"),
+    securityEventsTbody: document.querySelector("#securityEventsTable tbody"),
 
     // Metrics Strip
     metricAcc: document.getElementById("metricAcc"),
@@ -262,6 +276,42 @@
         api.startDemo();
       }
     });
+
+    // CAN Stream filter chips
+    if (dom.canFilterAll && dom.canFilterFlagged) {
+      dom.canFilterAll.addEventListener("click", () => {
+        state.canFilter = "all";
+        dom.canFilterAll.classList.add("active");
+        dom.canFilterFlagged.classList.remove("active");
+        state.lastJson.can = null;
+        if (state.lastSnapshot) renderCANStream(state.lastSnapshot);
+      });
+      dom.canFilterFlagged.addEventListener("click", () => {
+        state.canFilter = "flagged";
+        dom.canFilterFlagged.classList.add("active");
+        dom.canFilterAll.classList.remove("active");
+        state.lastJson.can = null;
+        if (state.lastSnapshot) renderCANStream(state.lastSnapshot);
+      });
+    }
+
+    // V2X Stream filter chips
+    if (dom.v2xFilterAll && dom.v2xFilterFlagged) {
+      dom.v2xFilterAll.addEventListener("click", () => {
+        state.v2xFilter = "all";
+        dom.v2xFilterAll.classList.add("active");
+        dom.v2xFilterFlagged.classList.remove("active");
+        state.lastJson.v2x = null;
+        if (state.lastSnapshot) renderV2XStream(state.lastSnapshot);
+      });
+      dom.v2xFilterFlagged.addEventListener("click", () => {
+        state.v2xFilter = "flagged";
+        dom.v2xFilterFlagged.classList.add("active");
+        dom.v2xFilterAll.classList.remove("active");
+        state.lastJson.v2x = null;
+        if (state.lastSnapshot) renderV2XStream(state.lastSnapshot);
+      });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -622,16 +672,23 @@
     }
   }
 
-  // 6. Live CAN Telemetry Stream (12 rows)
+  // 6. Live CAN Telemetry Stream
   function renderCANStream(snap) {
-    const canList = snap.can || [];
-    const rawCan = JSON.stringify(canList);
-    if (rawCan === state.lastJson.can) return;
-    state.lastJson.can = rawCan;
+    const rawList = snap.can || [];
+    const flaggedCount = snap.can_flagged_count != null ? snap.can_flagged_count : rawList.filter(f => f.verdict !== "normal").length;
+    if (dom.canFlaggedBadge) dom.canFlaggedBadge.textContent = String(flaggedCount);
+
+    const displayList = state.canFilter === "flagged"
+      ? rawList.filter((f) => (f.verdict || "").toLowerCase() !== "normal")
+      : rawList;
+
+    const cacheKey = JSON.stringify({ f: state.canFilter, list: displayList });
+    if (cacheKey === state.lastJson.can) return;
+    state.lastJson.can = cacheKey;
 
     dom.canTbody.innerHTML = "";
 
-    canList.slice(0, 12).forEach((f) => {
+    displayList.slice(0, 15).forEach((f) => {
       const tr = document.createElement("tr");
       const v = (f.verdict || "normal").toLowerCase();
 
@@ -639,7 +696,16 @@
       else if (v === "suspicious") tr.className = "row-suspicious";
 
       tr.appendChild(createTextEl("td", f.ts != null ? f.ts.toFixed(3) : "-"));
-      tr.appendChild(createTextEl("td", f.id || "-"));
+
+      // ID with repeat-count formatting
+      const idTd = document.createElement("td");
+      idTd.appendChild(document.createTextNode(f.id || "-"));
+      if (f.count && f.count > 1) {
+        const rep = createTextEl("span", `(x ${f.count.toLocaleString()})`, "repeat-badge");
+        idTd.appendChild(rep);
+      }
+      tr.appendChild(idTd);
+
       tr.appendChild(createTextEl("td", String(f.dlc || 8)));
       tr.appendChild(createTextEl("td", f.data || "-"));
       tr.appendChild(createTextEl("td", f.sender || "-"));
@@ -654,21 +720,40 @@
     });
   }
 
-  // 7. Live V2X Telemetry Stream (10 rows)
+  // 7. Live V2X Telemetry Stream
   function renderV2XStream(snap) {
-    const v2xList = snap.v2x || [];
-    const rawV2x = JSON.stringify(v2xList);
-    if (rawV2x === state.lastJson.v2x) return;
-    state.lastJson.v2x = rawV2x;
+    const rawList = snap.v2x || [];
+    const flaggedCount = snap.v2x_flagged_count != null ? snap.v2x_flagged_count : rawList.filter(m => m.status !== "accepted").length;
+    if (dom.v2xFlaggedBadge) dom.v2xFlaggedBadge.textContent = String(flaggedCount);
+
+    const displayList = state.v2xFilter === "flagged"
+      ? rawList.filter((m) => (m.status || "").toLowerCase() !== "accepted")
+      : rawList;
+
+    const cacheKey = JSON.stringify({ f: state.v2xFilter, list: displayList });
+    if (cacheKey === state.lastJson.v2x) return;
+    state.lastJson.v2x = cacheKey;
 
     dom.v2xTbody.innerHTML = "";
 
-    v2xList.slice(0, 10).forEach((msg) => {
+    displayList.slice(0, 12).forEach((msg) => {
       const tr = document.createElement("tr");
       const st = (msg.status || "accepted").toLowerCase();
 
+      if (st === "rejected") tr.className = "row-blocked";
+      else if (st === "suspicious") tr.className = "row-suspicious";
+
       tr.appendChild(createTextEl("td", msg.ts != null ? msg.ts.toFixed(3) : "-"));
-      tr.appendChild(createTextEl("td", msg.sender || "-"));
+
+      // Sender with repeat-count formatting
+      const senderTd = document.createElement("td");
+      senderTd.appendChild(document.createTextNode(msg.sender || "-"));
+      if (msg.count && msg.count > 1) {
+        const rep = createTextEl("span", `(x ${msg.count.toLocaleString()})`, "repeat-badge");
+        senderTd.appendChild(rep);
+      }
+      tr.appendChild(senderTd);
+
       tr.appendChild(createTextEl("td", msg.type || "-"));
 
       const trust = msg.trust != null ? (msg.trust * 100).toFixed(0) + "%" : "-";
@@ -678,13 +763,77 @@
       const stPill = createTextEl("span", msg.status || "accepted", `pill pill-${st}`);
       stTd.appendChild(stPill);
 
-      if (st === "rejected" && msg.reason) {
+      if ((st === "rejected" || st === "suspicious") && msg.reason) {
         const reasonSub = createTextEl("span", msg.reason, "v2x-reason-sub");
         stTd.appendChild(reasonSub);
       }
       tr.appendChild(stTd);
 
       dom.v2xTbody.appendChild(tr);
+    });
+  }
+
+  // 7b. Security Events Feed (Combined CAN + V2X)
+  function renderSecurityEvents(snap) {
+    if (!dom.securityEventsTbody) return;
+    const events = snap.security_events || [];
+    const rawEvents = JSON.stringify(events);
+    if (rawEvents === state.lastJson.securityEvents) return;
+    state.lastJson.securityEvents = rawEvents;
+
+    if (dom.secEventsCount) {
+      dom.secEventsCount.textContent = `${events.length} Events`;
+    }
+
+    dom.securityEventsTbody.innerHTML = "";
+
+    if (events.length === 0) {
+      const tr = document.createElement("tr");
+      const td = createTextEl("td", "No security incidents detected. System secure.");
+      td.colSpan = 5;
+      td.style.color = "var(--text-dim)";
+      td.style.textAlign = "center";
+      tr.appendChild(td);
+      dom.securityEventsTbody.appendChild(tr);
+      return;
+    }
+
+    events.slice(0, 20).forEach((ev) => {
+      const tr = document.createElement("tr");
+      const isCan = ev.domain === "CAN";
+      const v = (ev.verdict || "blocked").toLowerCase();
+
+      if (v === "blocked" || v === "rejected") tr.className = "row-blocked";
+      else if (v === "suspicious") tr.className = "row-suspicious";
+
+      // Domain Badge
+      const dTd = document.createElement("td");
+      const dBadge = createTextEl("span", `[${ev.domain}]`, isCan ? "domain-badge-can" : "domain-badge-v2x");
+      dTd.appendChild(dBadge);
+      tr.appendChild(dTd);
+
+      // Time
+      tr.appendChild(createTextEl("td", ev.ts != null ? `${ev.ts.toFixed(3)}s` : "-"));
+
+      // ID / Sender
+      const idTd = document.createElement("td");
+      idTd.appendChild(document.createTextNode(ev.id || ev.sender || "-"));
+      if (ev.count && ev.count > 1) {
+        const rep = createTextEl("span", `(x ${ev.count.toLocaleString()})`, "repeat-badge");
+        idTd.appendChild(rep);
+      }
+      tr.appendChild(idTd);
+
+      // Verdict / Status Pill
+      const vTd = document.createElement("td");
+      const vPill = createTextEl("span", ev.verdict || "blocked", `pill pill-${v}`);
+      vTd.appendChild(vPill);
+      tr.appendChild(vTd);
+
+      // Reason / Explanation
+      tr.appendChild(createTextEl("td", ev.reason || "-"));
+
+      dom.securityEventsTbody.appendChild(tr);
     });
   }
 
@@ -726,6 +875,7 @@
   // -------------------------------------------------------------------------
   function applySnapshot(snap) {
     if (!snap) return;
+    state.lastSnapshot = snap;
     requestAnimationFrame(() => {
       renderBanner(snap);
       renderControls(snap);
@@ -734,6 +884,7 @@
       renderFailSafe(snap);
       renderCANStream(snap);
       renderV2XStream(snap);
+      renderSecurityEvents(snap);
       renderMetrics(snap);
     });
   }

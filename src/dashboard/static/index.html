@@ -229,9 +229,17 @@
         <section class="streams-panel" aria-label="Live Telemetry Streams">
           <!-- CAN Stream -->
           <div class="table-panel">
-            <div class="panel-title">
-              <span>Live CAN Bus Stream (Last 12 Frames)</span>
-              <span class="panel-title-badge">~480 msg/s</span>
+            <div class="table-header-row">
+              <div class="panel-title" style="border-bottom: none; padding-bottom: 0;">
+                <span>Live CAN Bus Stream</span>
+                <span class="panel-title-badge">~480 msg/s</span>
+              </div>
+              <div class="stream-filter-group" id="canFilterGroup">
+                <button class="filter-chip active" id="canFilterAll" type="button">All</button>
+                <button class="filter-chip" id="canFilterFlagged" type="button">
+                  Flagged only <span class="stream-badge" id="canFlaggedBadge">0</span>
+                </button>
+              </div>
             </div>
             <div class="table-container">
               <table class="soc-table" id="canTable">
@@ -254,9 +262,17 @@
 
           <!-- V2X Stream -->
           <div class="table-panel">
-            <div class="panel-title">
-              <span>Live V2X Message Stream (Last 10 Messages)</span>
-              <span class="panel-title-badge">10 Hz</span>
+            <div class="table-header-row">
+              <div class="panel-title" style="border-bottom: none; padding-bottom: 0;">
+                <span>Live V2X Message Stream</span>
+                <span class="panel-title-badge">10 Hz</span>
+              </div>
+              <div class="stream-filter-group" id="v2xFilterGroup">
+                <button class="filter-chip active" id="v2xFilterAll" type="button">All</button>
+                <button class="filter-chip" id="v2xFilterFlagged" type="button">
+                  Flagged only <span class="stream-badge" id="v2xFlaggedBadge">0</span>
+                </button>
+              </div>
             </div>
             <div class="table-container">
               <table class="soc-table" id="v2xTable">
@@ -267,6 +283,35 @@
                     <th>Type</th>
                     <th>Trust</th>
                     <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Populated dynamically via DOM textContent -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4b. Combined Security Events Feed -->
+        <section class="security-events-panel" aria-label="Security Events Feed">
+          <div class="table-panel">
+            <div class="table-header-row">
+              <div class="panel-title" style="border-bottom: none; padding-bottom: 0;">
+                <span>Security Events Feed</span>
+                <span class="panel-title-badge" id="secEventsCount">0 Events</span>
+              </div>
+              <span class="stream-badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171;">CAN + V2X Flagged</span>
+            </div>
+            <div class="table-container" style="max-height: 160px;">
+              <table class="soc-table" id="securityEventsTable">
+                <thead>
+                  <tr>
+                    <th>Domain</th>
+                    <th>Time</th>
+                    <th>ID / Sender</th>
+                    <th>Verdict / Status</th>
+                    <th>Reason / Attribution</th>
                   </tr>
                 </thead>
                 <tbody>
