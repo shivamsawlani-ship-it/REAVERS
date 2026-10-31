@@ -230,10 +230,24 @@ def main() -> None:
         help="Simulation scenario to execute (default: demo)",
     )
     parser.add_argument("--duration", type=float, default=60.0, help="Scenario duration in seconds")
+    parser.add_argument("--headless", action="store_true", help="Run simulation headless in fast simulated time")
     parser.add_argument("--serve", action="store_true", help="Run indefinitely and listen for CLI attacks")
     parser.add_argument("--no-protection", action="store_true", help="Disable fail-safe gateway protection")
     parser.add_argument("--no-ai", action="store_true", help="Disable AI inference in risk fusion")
     args = parser.parse_args()
+
+    if args.headless:
+        cfg = load_config(overrides={"risk": {"use_ai": not args.no_ai}})
+        engine = CAVShieldEngine(cfg=cfg)
+        engine.set_protection(not args.no_protection)
+        atk = "spoof_brake" if args.scenario == "brake" else ("flood" if args.scenario == "flood" else ("replay" if args.scenario == "replay" else ("v2x_phantom" if args.scenario == "v2x" else None)))
+        print_banner(f"RUNNING HEADLESS SIMULATION: {args.scenario.upper()} ({args.duration}s fast-time)")
+        snap = engine.run_headless(duration_s=args.duration, attack_name=atk)
+        print_banner("HEADLESS SIMULATION COMPLETE - METRICS")
+        m = snap["metrics"]
+        print(f"Mode: {snap['mode']} | Accuracy: {m['accuracy'] * 100:.2f}% | Recall: {m['recall'] * 100:.2f}% | FPR: {m['fpr'] * 100:.2f}%")
+        print(f"Twin Speed: {snap['twin']['speed_kmh']:.1f} km/h | Applied Decel: {snap['twin']['applied_decel']:.2f} m/s² | Rejected: {snap['failsafe']['rejected_commands']}")
+        return
 
     run_scenario(
         scenario=args.scenario,

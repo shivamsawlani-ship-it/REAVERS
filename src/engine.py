@@ -467,6 +467,152 @@ class CAVShieldEngine:
         """Toggle active fail-safe gateway enforcement."""
         self.failsafe.set_protection_enabled(enabled)
 
+    def run_headless(
+        self,
+        duration_s: float = 20.0,
+        dt: float = 0.005,
+        attack_name: Optional[str] = None,
+        attack_start_s: float = 2.0,
+        attack_duration_s: float = 5.0,
+    ) -> Dict[str, Any]:
+        """Run the engine headless in fast simulated time without background threads.
+
+        Parameters
+        ----------
+        duration_s : float
+            Total simulation time to advance in virtual seconds.
+        dt : float
+            Time step per iteration (default 5ms = 200 Hz).
+        attack_name : Optional[str]
+            Optional attack to inject (e.g. 'spoof_brake').
+        attack_start_s : float
+            Simulation time when attack should start.
+        attack_duration_s : float
+            Duration of the injected attack in simulation seconds.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Final snapshot dictionary.
+        """
+        self.reset()
+        t = 0.0
+        n_steps = int(duration_s / dt)
+        attack_injected = False
+
+        for step_idx in range(n_steps):
+            t = round(step_idx * dt, 4)
+
+            # Trigger attack injection if requested
+            if attack_name and not attack_injected and t >= attack_start_s:
+                self.world.injector.start(attack_name, duration=attack_duration_s, now=t)
+                self.attack_markers.append(t)
+                attack_injected = True
+
+            # 1. Step world simulation
+            can_frames, v2x_msgs = self.world.step(now=t, dt=dt, apply_to_twin=False)
+
+            # Update sensors
+            sensor_snapshot = self.world.env.sense(ego_speed_kmh=self.world.twin.state.speed_kmh, now=t)
+            self.physics_engine.set_sensor_snapshot(sensor_snapshot)
+            self.v2x_validator.set_sensor_snapshot(sensor_snapshot)
+
+            # 2. Process CAN frames through gateway fast-path
+            for frame in can_frames:
+                # Update features & sliding window
+                feat_vec = self.feature_extractor.extract(frame.arb_id, frame.data, frame.timestamp, frame.dlc)
+                full_window = self.windower.push(
+                    vec=feat_vec,
+                    ts=frame.timestamp,
+                    label=frame.label,
+                    subtype=frame.subtype,
+                    raw_id=frame.arb_id,
+                    raw_payload=frame.data,
+                )
+                if full_window is not None:
+                    # Score window synchronously in headless mode
+                    anomaly_res = self.anomaly_detector.score(full_window)
+                    stat_vec = window_stat_features(full_window, known_ids=KNOWN_IDS)
+                    clf_res = self.attack_classifier.predict(stat_vec, anomaly_score=anomaly_res.normalized)
+                    self.ai_context = AIContext(
+                        anomaly=anomaly_res.normalized,
+                        attack_prob=clf_res.attack_prob,
+                        label=clf_res.label,
+                        confidence=clf_res.confidence,
+                        probs=clf_res.probs,
+                        t=frame.timestamp,
+                        available=(self.anomaly_detector.available or self.attack_classifier.available),
+                    )
+
+                # Gate check
+                if not self.failsafe.gate(frame, now=frame.timestamp):
+                    self.metrics.record_frame(frame.label, is_positive_decision=True, detection_latency_ms=0.03)
+                    self._record_can_snapshot(frame, verdict="blocked", reason="Quarantined or rate-limited")
+                    continue
+
+                # Deterministic rules
+                rule_evidences = self.rule_engine.evaluate(frame)
+
+                # Physics invariants
+                try:
+                    decoded = decode(frame.arb_id, frame.data)
+                except Exception:
+                    decoded = None
+                phys_evidences = self.physics_engine.check(frame, decoded)
+
+                # Multi-source risk fusion
+                decision = self.risk_engine.fuse_can(
+                    frame=frame,
+                    evidences=rule_evidences + phys_evidences,
+                    ai_ctx=self.ai_context,
+                    now=frame.timestamp,
+                )
+                self.latest_decision = decision
+
+                # Fail-safe enforcement
+                forward, actions = self.failsafe.enforce(decision, frame, now=frame.timestamp)
+
+                is_positive = (not forward) or (decision.level >= RiskLevel.HIGH)
+                self.metrics.record_frame(frame.label, is_positive_decision=is_positive, detection_latency_ms=0.035)
+
+                if forward:
+                    self.rule_engine.commit(frame)
+                    self.physics_engine.update(frame, decoded)
+                    if frame.arb_id in COMMAND_IDS:
+                        self.world.twin.accept_command(frame.arb_id, decoded, t)
+                    elif frame.arb_id in KNOWN_IDS:
+                        self.world.twin.accept_status(frame.arb_id, decoded)
+                    verdict_str = "suspicious" if decision.level >= RiskLevel.MEDIUM else "normal"
+                else:
+                    verdict_str = "blocked"
+
+                self._record_can_snapshot(frame, verdict=verdict_str, reason=decision.explanation)
+
+            # 3. Process V2X messages
+            for v2x_msg in v2x_msgs:
+                verdict = self.v2x_validator.validate(v2x_msg, now=v2x_msg.timestamp)
+                v2x_dec = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=v2x_msg.timestamp)
+                accepted = self.failsafe.enforce_v2x(v2x_dec, v2x_msg, now=v2x_msg.timestamp)
+                if accepted and v2x_msg.obstacle is not None:
+                    with self._world_lock:
+                        self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
+                status_str = "accepted" if accepted else "rejected"
+                reason_str = "; ".join(verdict.reasons) if verdict.reasons else "Verified"
+                with self._snapshot_lock:
+                    self.recent_v2x.appendleft({
+                        "ts": round(v2x_msg.timestamp, 3),
+                        "sender": v2x_msg.sender_id,
+                        "type": v2x_msg.msg_type,
+                        "trust": round(verdict.trust, 2),
+                        "status": status_str,
+                        "reason": reason_str,
+                    })
+
+            # Update auto-recovery timers
+            self.failsafe.update_mode(t)
+
+        return self.snapshot()
+
     # -----------------------------------------------------------------------
     # Thread 1: World Simulation Loop
     # -----------------------------------------------------------------------

@@ -79,6 +79,7 @@ class AnomalyDetector:
         self.iso_forest: Optional[Any] = None
         self.scaler: Optional[Any] = None
         self.ae_model: Optional[Any] = None
+        self.onnx_detector: Optional[Any] = None
         self.feat_mean: Optional[np.ndarray] = None
         self.feat_std: Optional[np.ndarray] = None
 
@@ -86,10 +87,30 @@ class AnomalyDetector:
 
     def _load_backend(self) -> None:
         """Load selected backend model and threshold metadata."""
-        if self.backend_name == "lstm_ae":
+        if self.backend_name in ("onnx", "onnx_ae", "onnx_anomaly"):
+            self._load_onnx()
+        elif self.backend_name == "lstm_ae":
             self._load_lstm_ae()
         else:
             self._load_isolation_forest()
+
+    def _load_onnx(self) -> None:
+        """Load ONNX Runtime backend."""
+        try:
+            from src.edge.onnx_inference import ONNXAnomalyDetector
+
+            self.onnx_detector = ONNXAnomalyDetector(cfg=self.cfg)
+            self.available = self.onnx_detector.available
+            self.threshold = self.onnx_detector.threshold
+            self.scale = self.onnx_detector.scale
+            if self.available:
+                logger.info("Loaded ONNX Anomaly backend (threshold: %.6f).", self.threshold)
+            else:
+                logger.warning("ONNX Anomaly backend unavailable.")
+        except Exception as exc:
+            logger.warning("Failed to load ONNX backend: %s", exc)
+            self.available = False
+            self.onnx_detector = None
 
     def _load_isolation_forest(self) -> None:
         """Load IsolationForest baseline model, scaler, and threshold metadata."""
@@ -187,6 +208,9 @@ class AnomalyDetector:
         """
         if not self.available:
             return AnomalyResult(raw=0.0, normalized=0.0, is_anomaly=False, latency_ms=0.0)
+
+        if self.backend_name in ("onnx", "onnx_ae", "onnx_anomaly") and self.onnx_detector is not None:
+            return self.onnx_detector.score(window_or_data)
 
         t0 = time.perf_counter()
 
