@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>CAV SHIELD | Highway Attack Simulation</title>
+<style>
+:root{color-scheme:dark;--line:rgba(91,190,255,.23);--cyan:#6ee7c8;--muted:#8da8c8;--text:#e9f6ff;--red:#ff526b;--orange:#ffae48;--green:#5df0bd}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(ellipse at 50% 35%,#0a2850 0%,#061329 43%,#030711 100%);font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--text);min-height:100vh;overflow-x:hidden;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+button{font:inherit}button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+header{height:68px;display:flex;align-items:center;justify-content:space-between;padding:0 26px;border-bottom:1px solid var(--line);background:rgba(4,11,25,.8)}
+.brand{display:flex;align-items:center;gap:14px}.logo{width:36px;height:36px;border:1px solid var(--cyan);display:grid;place-items:center;transform:rotate(45deg);box-shadow:0 0 18px #168bff55}.logo span{transform:rotate(-45deg);font-weight:900;color:var(--cyan)}
+.brand h1{font-size:17px;letter-spacing:2px;margin:0}.brand small{display:block;color:var(--muted);font-size:10px;letter-spacing:1.4px;margin-top:4px}
+.topright{display:flex;align-items:center;gap:16px;color:var(--muted);font-size:12px}.live{color:var(--green);letter-spacing:1.5px;font-size:12px}.live:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor;margin-right:8px}
+.attack .live{color:var(--red)}
+main{max-width:1500px;margin:auto;padding:22px 24px 28px}
+.heading{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:16px}.eyebrow{color:var(--cyan);font-size:11px;letter-spacing:2px}.heading h2{font-size:25px;margin:7px 0 4px}.heading p{margin:0;color:var(--muted);font-size:12px;max-width:560px;line-height:1.5}
+.controls{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #2a4a44;background:#0a1c36;color:#cfeaff;padding:10px 13px;border-radius:5px;font-size:12px;cursor:pointer;transition:.2s}.btn:hover,.btn.active{border-color:var(--cyan);color:#fff;box-shadow:0 0 14px #1f9dff35;background:#10335a}
+.btn.hot{border-color:#a8364a;background:#3a0f1b;color:#ffd5db}.btn.hot:hover{border-color:var(--red);box-shadow:0 0 14px #ff526b44}
+.btn.primary{background:linear-gradient(110deg,#087cbd,#1558c5);border-color:#49caff;color:#fff}.guard .btn.primary{background:linear-gradient(110deg,#0b8b6c,#0e6aa0);border-color:var(--green)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.stat,.panel{border:1px solid var(--line);background:linear-gradient(135deg,rgba(11,30,57,.9),rgba(5,15,32,.91));border-radius:8px}
+.stat{padding:14px 16px}.stat label{display:block;color:var(--muted);font-size:11px}.stat strong{display:block;font-size:23px;margin-top:8px}.stat small{font-size:11px;color:var(--muted);font-weight:500;margin-left:5px}
+.accent{color:var(--cyan)}.warn{color:var(--orange)}.danger{color:var(--red)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
+.scene-panel{position:relative;overflow:hidden;aspect-ratio:16/9;min-height:340px;background:#030711;transition:border-color .3s,box-shadow .3s}
+.attack .scene-panel{border-color:var(--red);box-shadow:0 0 30px rgba(255,82,107,.35)}
+.scene-panel svg.layer{position:absolute;inset:0;width:100%;height:100%}
+.panel-head{position:absolute;z-index:3;left:16px;right:16px;top:13px;display:flex;justify-content:space-between;font-size:12px;pointer-events:none;text-shadow:0 1px 6px #000}.panel-head span{color:#b5cde6}
+.scene-foot{position:absolute;z-index:3;left:16px;right:16px;bottom:12px;display:flex;justify-content:space-between;color:#9fbddb;font-size:11px;pointer-events:none;text-shadow:0 1px 6px #000}
+.tint{position:absolute;inset:0;z-index:2;pointer-events:none;opacity:0;background:radial-gradient(ellipse at center,rgba(255,40,70,0) 40%,rgba(255,40,70,.5) 100%)}
+.attack .tint{opacity:1;animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.alertpill,.redbox,.safechip{position:absolute;z-index:4}
+.alertpill{display:none;top:48px;left:50%;transform:translateX(-50%);align-items:center;gap:12px;background:#3a0710;border:1px solid var(--red);color:#ffd5db;padding:10px 14px;border-radius:6px;font-size:13px;box-shadow:0 0 24px #ff526b66;animation:blink 1s step-end infinite;white-space:nowrap}
+.alertpill button{border:1px solid var(--red);background:#ff526b;color:#1a0309;border-radius:4px;padding:5px 9px;cursor:pointer;font-weight:700}
+@keyframes blink{50%{background:#5a0c1b}}
+.redbox{display:none;left:16px;top:44px;width:250px;background:rgba(58,7,16,.94);border:2px solid var(--red);border-radius:6px;padding:11px 13px;box-shadow:0 0 26px #ff526b77}
+.attack[data-view="0"] .redbox{top:100px}
+.attack .redbox{display:block}.attack[data-view="0"] .alertpill{display:flex}
+.redbox h4{margin:0 0 8px;font-size:13px;color:#ff8a9a}.redbox dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:11px}.redbox dt{color:#d49aa4}.redbox dd{margin:0;color:#fff;font-variant-numeric:tabular-nums}.redbox p{margin:9px 0 0;font-size:11px;color:#ffc2cb;line-height:1.4}
+.safechip{display:none;top:46px;right:16px;background:rgba(7,50,45,.92);border:1px solid var(--green);color:#bfffe9;padding:8px 12px;border-radius:6px;font-size:12px}
+.guard:not(.attack) .safechip{display:block}
+.atk-only{display:none}.attack .atk-only{display:inline}
+.ok-view,.bad-view,.cl-bad,.gok{display:none}
+.attack .bad-view,.attack .cl-bad{display:flex}
+.guard:not(.attack) .gok{display:block}.attack .gok{display:none}
+.side{display:flex;flex-direction:column;gap:14px}.side .panel{padding:16px}.side-title{font-size:12px;margin:0 0 12px;color:#bfe9ff;font-weight:700}
+.statusrow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(91,190,255,.12);font-size:12px}.statusrow:last-child{border-bottom:0}
+.pill{font-size:10px;border-radius:3px;padding:3px 6px;border:1px solid currentColor}.pill.ok{color:var(--green)}.pill.warn{color:var(--orange)}.pill.bad{color:var(--red)}
+.gline{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;color:#afc8e2;line-height:1.5}
+.sw{flex:none;width:46px;height:24px;border-radius:12px;border:1px solid #2a4a44;background:#0a1c36;position:relative;cursor:pointer;padding:0}.sw i{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:.2s}
+.guard .sw{background:#0c4b43;border-color:var(--green)}.guard .sw i{left:25px;background:var(--green)}
+#log{max-height:250px;overflow:auto}.event{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid rgba(91,190,255,.12);font-size:11px;line-height:1.45;color:#afc8e2}.event:last-child{border-bottom:0}.event-dot{width:8px;height:8px;border-radius:50%;margin-top:4px;flex:none}.event b{display:block;color:#fff;font-size:12px}.event small{color:var(--muted)}
+.footerline{color:#6686aa;font-size:11px;margin-top:14px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:#102b4a;border:1px solid var(--cyan);padding:11px 17px;border-radius:5px;font-size:12px;transition:.25s;z-index:9;pointer-events:none}.toast.show{opacity:1;transform:translateX(-50%)}
+/* camera */
+#ext,#int{transition:transform 1.3s cubic-bezier(.65,0,.25,1),opacity 1s}
+#ext{transform-origin:52% 68%}
+#int{transform-origin:52% 68%;opacity:0;transform:scale(.45);pointer-events:none}
+[data-view="1"] #ext,[data-view="2"] #ext{transform:scale(3.2);opacity:0;pointer-events:none}
+[data-view="1"] #int,[data-view="2"] #int{opacity:1;transform:none}
+#intG{transform-box:view-box;transform-origin:520px 300px;transition:transform 1.2s cubic-bezier(.65,0,.25,1)}
+[data-view="2"] #intG{transform:scale(1.85)}
+/* motion */
+.sc{animation:mv linear infinite}@keyframes mv{to{transform:translateX(var(--d))}}
+.far{--d:-960px;animation-duration:70s}.near{--d:-960px;animation-duration:22s}.pole{--d:-960px;animation-duration:2.2s}.post,.dsh{--d:-120px;animation-duration:.28s}
+.wh{transform-box:fill-box;transform-origin:center;animation:spin .4s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.bob{animation:bob 1.1s ease-in-out infinite}@keyframes bob{50%{transform:translateY(1.5px)}}
+.ln{stroke-dasharray:10 14;animation:dsh .5s linear infinite}@keyframes dsh{to{stroke-dashoffset:-24}}
+.flow{stroke-dasharray:8 8;animation:dsh .5s linear infinite}
+.ring{animation:rg 1.6s ease-in-out infinite;cursor:pointer}@keyframes rg{50%{opacity:.35}}
+/* screens */
+.info{width:216px;height:118px;border-radius:6px;overflow:hidden;font:600 9px/1.3 system-ui,sans-serif;background:#06172e;color:#d9efff;position:relative}
+.ok-view{display:flex;flex-direction:column;height:100%;justify-content:space-between;padding:5px 7px}.guard .ok-view,.ok-view{display:flex}.attack .ok-view{display:none}
+.ib{display:flex;justify-content:space-between;color:#8ec6ee}
+.info svg{width:100%;height:70px;border-radius:4px}
+.gok{position:absolute;right:6px;top:19px;background:#0c4b43;color:#bfffe9;padding:2px 6px;border-radius:3px;font-size:8px}
+.bad-view{flex-direction:column;justify-content:center;gap:3px;height:100%;padding:8px 10px;background:#3a0710;color:#ffd5db;border:2px solid var(--red);border-radius:6px;animation:fl .6s steps(2) infinite}
+.bad-view b{font-size:15px;color:#fff}@keyframes fl{50%{background:#6a0c1f}}
+.cluster{width:142px;height:54px;border-radius:5px;background:#06172e;color:#d9efff;font:600 8px/1.3 system-ui,sans-serif;display:flex;align-items:center;gap:8px;padding:0 10px}
+.cluster b{font-size:26px;min-width:44px;text-align:right;font-variant-numeric:tabular-nums;color:#fff}.cluster em{font-style:normal}
+.attack .cluster{background:#3a0710;color:#ffc2cb;animation:fl .5s steps(2) infinite}
+.attack .cl-ok{display:none}
+@media(max-width:1000px){.layout{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.heading{flex-direction:column;align-items:flex-start}.redbox{width:190px;padding:8px 10px}.redbox p{display:none}.alertpill{font-size:11px;white-space:normal;width:86%}header{padding:0 14px}.topright span:first-child{display:none}.brand small{display:none}main{padding:16px 12px}}
+@media(prefers-reduced-motion:reduce){.sc,.wh,.bob,.ln,.flow,.ring,.tint,.alertpill,.bad-view,.cluster{animation:none!important}#ext,#int,#intG{transition-duration:.01s}}
+
+:root{--cyan:#6ee7c8;--green:#6ee7c8;--line:#1f2630;--muted:#8b97a6;--text:#e8edf3;--red:#ff4d63;--card:#0d1117;--mono:"IBM Plex Mono",ui-monospace,monospace}
+body{background:#06080c;font-family:Manrope,"Segoe UI",system-ui,sans-serif}
+header{height:auto;padding:14px 24px;gap:16px;flex-wrap:wrap;background:#080b10;border-bottom:1px solid var(--line)}
+.logo{width:42px;height:42px;transform:none;border-radius:11px;background:#0f1a1a;border-color:#2c5a50;box-shadow:none}.logo span{transform:none}
+.brand h1{letter-spacing:4px;font-size:20px;font-weight:800}.brand small{letter-spacing:0;font-size:12px;margin-top:3px}
+.nav{display:flex;gap:4px;padding:5px;border:1px solid var(--line);border-radius:14px;background:#0b0f15}
+.nav .btn{border:0;background:none;box-shadow:none;border-radius:10px;padding:9px 14px;font-weight:700;font-size:13px;color:#aab6c4}
+.nav .btn.active{background:#12332d;color:var(--cyan);box-shadow:inset 0 0 0 1px #2c6a5b}
+.acts{display:flex;gap:8px;align-items:center}
+.acts .btn,.btn.wide{border-radius:10px;background:#0d1117;border:1px solid var(--line);font-weight:700;color:#dbe4ee}
+.acts .btn:hover,.btn.wide:hover{border-color:#2c6a5b;box-shadow:none}
+.guard #gbtn,.guard #gbtn2{border-color:#2c6a5b;color:var(--cyan);background:#0c1f1b}
+.live{border:1px solid #1e5a4c;background:#0c1f1b;color:var(--cyan);padding:9px 14px;border-radius:999px;font-weight:700;font-size:12px}
+.attack .live{border-color:var(--red);background:#2a0c13;color:#ff8a9a;box-shadow:0 0 18px #ff4d6355}
+.grid{max-width:1700px;margin:auto;padding:20px 22px;display:grid;grid-template-columns:290px minmax(0,1fr) 300px;gap:16px;align-items:start}
+.panel,.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:none}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}.col>.panel{padding:18px}
+.ptitle{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 12px;font-size:13px;letter-spacing:2.5px;font-weight:800;color:#c9d3df}
+.chip{font-size:11px;letter-spacing:0;font-weight:600;color:var(--cyan);border:1px solid #1e5a4c;background:#0c1f1b;padding:5px 9px;border-radius:7px;white-space:nowrap}
+.attack #chip{color:#fff;background:#ff4d63;border-color:#ff4d63}
+.lead{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.5}
+.scn{width:100%;text-align:left;background:#0a0e14;border:1px solid var(--line);border-radius:12px;padding:13px;color:var(--text);cursor:pointer;margin-bottom:10px;font:inherit}
+.scn b{display:block;font-size:14px}.scn span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin:5px 0 8px}.scn em{font-style:normal;color:var(--cyan);font-size:12px;font-weight:700}
+.scn:hover{border-color:#2c6a5b}.scn.on{border-color:var(--red);background:#2a0c13}.scn.on em{color:#ff8a9a}
+.scene-panel{border-radius:16px}
+.banner{display:none;align-items:center;gap:10px;background:#2a0c13;border:1px solid var(--red);color:#ffd5db;border-radius:12px;padding:13px 16px;font-size:14px}.attack .banner{display:flex}
+.banner i{flex:none;width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red)}.banner b{color:#fff}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.tiles .stat{padding:14px 16px}
+.stat label{color:var(--muted);font-size:12px}.stat strong{font-family:var(--mono);font-size:26px}
+.statusrow{font-size:13px}.btn.wide{width:100%;margin-top:12px}
+.event b{font-size:13px}.redbox dd,#rbf,#rbt{font-family:var(--mono)}
+.footerline{grid-column:1/-1;margin:0}
+.paused *{animation-play-state:paused!important}
+@media(max-width:1150px){.grid{grid-template-columns:1fr;padding:14px 12px}.tiles{grid-template-columns:repeat(2,1fr)}}
+.amb{stroke:#6ee7c8;opacity:.85;filter:drop-shadow(0 0 4px #6ee7c8)}.attack .amb{stroke:#ff526b;filter:drop-shadow(0 0 5px #ff526b)}
+.nav{flex-wrap:wrap}.nav .btn{padding:8px 12px;font-size:13px;line-height:1.2;text-align:center}
+.selpill{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:0 12px;background:#0b0f15;height:42px}.selpill i{width:8px;height:8px;border-radius:50%;background:var(--muted)}.running .selpill i{background:var(--cyan);box-shadow:0 0 8px var(--cyan)}.attack .selpill i{background:var(--red);box-shadow:0 0 8px var(--red)}
+.selpill select{background:none;border:0;color:#dbe4ee;font-weight:700;font-size:12px;letter-spacing:1px;outline:0;max-width:200px;text-transform:uppercase;cursor:pointer}.selpill option{background:#0d1117}
+[hidden]{display:none!important}
+#scn{max-height:calc(100vh - 220px);min-height:420px;overflow:auto;padding-right:8px}#scn::-webkit-scrollbar{width:6px}#scn::-webkit-scrollbar-thumb{background:#1e5a4c;border-radius:3px}
+.scn .row{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.scn .chip{flex:none}.scn.sel{border-color:#2c6a5b}
+.dashed{border:1px dashed #1e5a4c;border-radius:16px;text-align:center;padding:40px 30px;color:#c9d3df;background:rgba(12,31,27,.12)}.dashed .em{font-size:54px}.dashed h3{letter-spacing:3px;font-size:14px;margin:10px 0 14px}.dashed p{color:var(--muted);line-height:1.7;font-size:14px;margin:0}.dashed p b{color:#fff}
+.dashed.small{padding:18px;font-size:12px;color:var(--muted)}#ready{padding:28px 18px}#ready .em{font-size:48px}#ready.bad{border-color:var(--red);background:#2a0c13}#ready.ok{border-color:#2c6a5b}
+#simwrap{display:none;flex-direction:column;gap:16px}.running #simwrap,#twinhost #simwrap{display:flex}.running #parked{display:none}#twinhost #simwrap{max-width:1100px;margin:auto}
+.camrow{display:flex;gap:6px}.camrow .btn{border-radius:10px;font-weight:700}
+.view{max-width:1700px;margin:auto;padding:20px 22px}.pad{padding:18px}.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}.btns{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.btn.sm{padding:5px 9px;font-size:11px}.mut{color:var(--muted)}
+table.t{width:100%;border-collapse:collapse;font-size:12px}.t th{text-align:left;color:var(--muted);font-weight:600;padding:8px;border-bottom:1px solid var(--line)}.t td{padding:8px;border-bottom:1px solid rgba(255,255,255,.05)}
+@media(min-width:1151px){.grid{grid-template-columns:330px minmax(0,1fr) 320px}}@media(max-width:900px){.two{grid-template-columns:1fr}}
+
+/* ===== Professional UI layer ===== */
+:root{--bg:#070a10;--surf:#0d121b;--surf2:#111826;--line:#1c2535;--card:#0d121b;--text:#e6edf5;--muted:#8693a6;--cyan:#35d0a8;--green:#35d0a8;--red:#ff4d63;--orange:#ffb454;--info:#5aa9ff;--r:14px}
+html{scroll-behavior:smooth}body{background:var(--bg);font-family:Inter,"Segoe UI",system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#223049;border-radius:4px}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+header{padding:12px 24px 0;gap:0 16px;background:rgba(7,10,16,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);z-index:20}
+@media(min-height:760px){header{position:sticky;top:0}}
+.brand h1{font-size:18px;letter-spacing:.28em}.brand small{color:var(--muted);font-size:12px}
+.logo{background:linear-gradient(135deg,#0f2a26,#0c1a2a);border-color:#1e6b58;font-size:20px}
+.acts{margin-left:auto;gap:10px}
+.btn{border-radius:10px;padding:9px 14px;font-weight:600;font-size:13px;background:#0f1520;border:1px solid var(--line);color:#d5deea;transition:background .15s,border-color .15s,transform .1s}
+.btn:hover{background:#141d2c;border-color:#2f4a5e;box-shadow:none}.btn:active{transform:translateY(1px)}
+#pause{background:linear-gradient(180deg,#2bc4a0,#18977c);border-color:#35d0a8;color:#04130f;min-width:96px}#pause:hover{filter:brightness(1.08)}
+#gbtn{border-color:#5a4520;color:#ffcf8a;background:#1a140a;min-width:150px}.guard #gbtn{border-color:#1e7a62;color:#7ff0cf;background:#0c2a22}
+#rst{background:transparent}
+.selpill{height:40px;background:#0f1520;border-radius:10px;padding:0 12px}.selpill select{max-width:210px}
+.nav{order:3;flex-basis:100%;width:100%;margin-top:10px;padding:0;border:0;border-top:1px solid var(--line);border-radius:0;background:none;gap:2px;overflow-x:auto;flex-wrap:nowrap}
+.nav .btn{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:12px 16px;white-space:nowrap;color:var(--muted);font-weight:600}
+.nav .btn:hover{background:rgba(255,255,255,.03);color:#fff}.nav .btn.active{background:none;color:#fff;border-bottom-color:var(--cyan);box-shadow:none}
+#statusbar{display:flex;gap:10px 24px;align-items:center;flex-wrap:wrap;padding:9px 24px;border-bottom:1px solid var(--line);background:#090d14;font-size:12px;color:var(--muted)}
+#statusbar b{color:var(--text);font-weight:600}.sbd{width:8px;height:8px;border-radius:50%;background:#59657a;display:inline-block;margin-right:7px}
+.running .sbd{background:var(--green);box-shadow:0 0 8px var(--green)}.attack .sbd{background:var(--red);box-shadow:0 0 8px var(--red)}#sbClock{margin-left:auto;font-family:var(--mono)}
+.grid{padding:20px 24px;gap:18px}
+.panel,.stat{background:linear-gradient(180deg,#0f1520,#0c111a);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 8px 24px rgba(0,0,0,.25)}
+.col>.panel,.pad{padding:20px}
+.ptitle{font-size:12px;letter-spacing:.12em;color:#aeb9c9;padding-bottom:12px;margin:0 0 14px;border-bottom:1px solid var(--line)}
+.chip{border-radius:999px;padding:4px 10px;font-size:11px;letter-spacing:.02em}
+.lead{font-size:13px}
+.scn{position:relative;padding:14px 14px 12px 16px;border-radius:12px;background:#0b1019;transition:border-color .15s,transform .15s,background .15s}.scn:hover{transform:translateY(-1px);background:#0e1522}
+.scn b{font-size:14px;line-height:1.3}.scn span{font-size:12px}.scn em{font-size:12px;letter-spacing:.01em}.scn.on{background:#220b12}
+.sev{flex:none;font-size:10px;font-weight:700;letter-spacing:.08em;padding:3px 8px;border-radius:6px;border:1px solid currentColor}
+.sev.CRITICAL{color:#ff7186;background:#2a0c13}.sev.HIGH{color:var(--orange);background:#2a1e0a}.sev.NONE{color:var(--green);background:#0c2a22}
+.dashed{background:rgba(255,255,255,.015);border:1px dashed #27384a;border-radius:var(--r)}
+.dashed .em{width:84px;height:84px;margin:0 auto;border-radius:50%;display:grid;place-items:center;background:#0f1a22;border:1px solid #1c2e3a;font-size:38px}
+.dashed h3{font-size:13px;letter-spacing:.2em;color:#fff;margin:16px 0 12px}
+#parked{min-height:400px;display:flex;flex-direction:column;justify-content:center;align-items:center}#parked p{max-width:520px}
+.steps{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:26px}.steps span{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);background:#0b1019;border:1px solid var(--line);border-radius:999px;padding:6px 12px}.steps b{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#12332d;color:var(--cyan);font-size:11px}
+#ready.bad h3{color:#ff8a9a}#ready.ok h3{color:#7ff0cf}
+.camrow{padding:4px;border:1px solid var(--line);border-radius:12px;background:#0b1019;align-self:flex-start}.camrow .btn{border:0;background:none;padding:7px 14px}.camrow .btn.active{background:#12332d;color:var(--cyan)}
+.scene-panel{border-radius:var(--r)}#cam,.panel-head span{background:rgba(7,10,16,.72);border:1px solid var(--line);padding:4px 10px;border-radius:999px;font-size:12px}
+.tiles{gap:14px}.stat{position:relative;overflow:hidden;padding:16px 18px 16px 20px}.stat:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan)}
+.stat label{text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600}.stat strong{font-size:28px;margin-top:6px}
+.statusrow{padding:11px 0}.pill{border-radius:6px;font-weight:700;letter-spacing:.04em;padding:3px 8px}
+.event{display:block;position:relative;margin-left:4px;padding:10px 0 10px 18px;border-left:2px solid var(--line);border-bottom:0}.event-dot{position:absolute;left:-6px;top:15px;margin:0}
+#log{max-height:300px}
+.view{padding:24px}.vhead{margin-bottom:18px}.vhead h2{margin:0 0 4px;font-size:22px;letter-spacing:-.01em}.vhead p{margin:0;color:var(--muted);max-width:720px}
+table.t th{font-size:11px;text-transform:uppercase;letter-spacing:.08em;padding:10px 8px}.t td{font-variant-numeric:tabular-nums;padding:10px 8px}.t tr:hover td{background:rgba(255,255,255,.025)}
+.btns .btn.active{background:#12332d;border-color:#1e7a62;color:var(--cyan)}
+.toast{background:#0f1a24;border:1px solid #1e6b58;border-radius:10px;box-shadow:0 12px 32px #000b;font-weight:600}
+.footerline{border-top:1px solid var(--line);padding-top:16px;text-align:center}
+@media(min-width:1151px) and (max-width:1280px){.grid{grid-template-columns:300px minmax(0,1fr)}.grid>aside:last-of-type{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){header{padding:10px 12px 0}.acts{width:100%;flex-wrap:wrap}#statusbar{padding:8px 12px}.grid,.view{padding:14px 12px}}
+
+/* ===== CAV SHIELD v2 additions ===== */
+.vs2{display:grid;gap:12px;grid-template-columns:1fr 1fr}.vs2.s3{grid-template-columns:repeat(3,1fr)}.vs2.s4{grid-template-columns:repeat(4,1fr)}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}.stat.sm2 strong{font-size:20px}
+.ecuring{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.ecu{padding:6px 11px;border:1px solid var(--cyan);border-radius:7px;font-size:11px;background:#0a1c36}
+.ecu.bad{border-color:var(--red);background:#3a0f1b;color:#ffd5db;box-shadow:0 0 14px #ff526b66}.ecu.safe{border-color:var(--green)}
+.dt-alert{border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:13px;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.dt-alert.bad{border-color:var(--red);background:#2a0c13}.dt-alert.ok{color:var(--muted)}
+.stat.bad{border-color:var(--red);background:#2a0c13}
+.hist{display:flex;align-items:flex-end;gap:6px;height:110px;border-bottom:1px solid var(--line)}.hist div{flex:1;background:var(--cyan);border-radius:3px 3px 0 0;min-height:2px;transition:height .25s}.hist div.hot{background:var(--red)}
+.hlab{display:flex;gap:6px;font-size:9px;color:var(--muted);margin-top:4px}.hlab span{flex:1;text-align:center}
+.pipe{display:grid;gap:10px}.stg{display:flex;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:#0a1c36;opacity:.5;transition:.3s}
+.stg.on{opacity:1;border-color:var(--orange)}.stg.ok{opacity:1;border-color:var(--green)}.stg.bad{opacity:1;border-color:var(--red);background:#2a0a12}
+.stg b{display:block}.stg small{color:var(--muted)}.stg .n{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--cyan);flex:none;font-size:12px}
+.arch{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#0a1c36;font-size:12px}.arch b{display:block;margin-bottom:4px}.arch span{color:var(--muted)}
+.cm td,.cm th{text-align:center}.cm td.d{background:#0f3a34}
+.btn.sm{padding:5px 9px;font-size:11px}
+@media(max-width:900px){.vs2.s3,.vs2.s4{grid-template-columns:1fr 1fr}}
+
+/* ===== Pipeline story (line-by-line attack visual) ===== */
+@keyframes dashmove{to{stroke-dashoffset:-28}}@keyframes slidein{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+.flowl{stroke-dasharray:8 6;animation:dashmove .7s linear infinite}
+.sumrow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}.sumrow .stat strong{font-size:18px}
+.outcome{font-size:13px;font-weight:800;letter-spacing:1px;padding:6px 12px;border-radius:7px;border:1px solid}
+.outcome.ok{color:var(--green);border-color:var(--green);background:#0c2a22}.outcome.bad{color:var(--red);border-color:var(--red);background:#2a0c13}.outcome.idle{color:var(--muted);border-color:var(--line)}
+.tl{position:relative;margin-left:14px;padding-left:26px;border-left:2px solid var(--line)}
+.tli{position:relative;margin-bottom:14px;animation:slidein .35s ease}
+.tli .dot{position:absolute;left:-43px;top:0;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#0a1c36;border:2px solid var(--cyan);font-size:14px}
+.tli.atk .dot{border-color:var(--red);background:#2a0c13;box-shadow:0 0 12px #ff526b66}.tli.det .dot{border-color:var(--orange);background:#2a1c08}.tli.def .dot{border-color:var(--green);background:#0c2a22;box-shadow:0 0 12px #5df0bd55}
+.tlb{border:1px solid var(--line);border-radius:9px;padding:10px 13px;background:#0a1c36}.tli.atk .tlb{border-color:#7a2335}.tli.def .tlb{border-color:#1e6b58}
+.tlh{display:flex;justify-content:space-between;gap:10px}.tlh small{color:var(--muted)}.tlb p{margin:5px 0 8px;color:#cfe2f5;font-size:13px}
+.hb{height:6px;border-radius:3px;background:#12233d;overflow:hidden;margin-bottom:4px}.hb i{display:block;height:100%;border-radius:3px;transition:width .4s}
+.tlb small.m{color:var(--muted);font-size:11px}
+@media(max-width:900px){.sumrow{grid-template-columns:1fr 1fr}}
+.actual{position:absolute;z-index:4;right:16px;bottom:44px;display:none;background:rgba(6,19,41,.92);border:1px solid var(--green);border-radius:9px;padding:9px 14px;text-align:right;box-shadow:0 0 18px #5df0bd44}
+body.speedatk .actual{display:block}.actual small{display:block;color:var(--green);font-size:10px;letter-spacing:1.5px;font-weight:800}.actual b{display:block;font-size:26px;color:#fff;line-height:1.15}.actual b span{color:var(--green)}.actual em{display:block;font-style:normal;font-size:11px;color:#ff8a9a}.actual u{text-decoration:none;font-weight:800}
+</style>
+</head>
+<body data-view="0">
+<header>
+  <div class="brand"><div class="logo"><span>🛡️</span></div><div><h1>CAV SHIELD</h1><small>Automotive Cybersecurity &amp; Cyber-Physical Intrusion Defense Layer</small></div></div>
+  <nav class="nav" aria-label="Sections"><button class="btn active" data-t="cc">🎯 Command Center</button><button class="btn" data-t="twin">🚗 Vehicle Twin</button><button class="btn" data-t="v2x">📡 V2X Safety</button><button class="btn" data-t="ds">📁 CAN Datasets</button><button class="btn" data-t="inc">🚨 Incidents</button><button class="btn" data-t="pipe">🧬 Pipeline</button><button class="btn" data-t="lab">🔬 Detection Lab</button><button class="btn" data-t="tel">💾 Stored Telemetry &amp; Anomalies</button></nav>
+  <div class="acts"><label class="selpill"><i></i><select id="scnSel" aria-label="Select a scenario"></select></label><button class="btn" id="pause" title="Start or pause the simulation">▶ Play</button><button class="btn" id="gbtn" aria-pressed="false" title="Isolate the CAN gateway and block attacks">🛡️ Fail-Safe: OFF</button><button class="btn" id="rst" title="Reset the simulation">🔄 Reset</button></div>
+</header>
+<div id="statusbar" role="status"><span><i class="sbd"></i><b id="sbState">PARKED</b></span><span>Scenario: <b id="sbScn">None</b></span><span>Fail-Safe: <b id="sbGrd">OFF</b></span><span>IDS threshold: <b id="sbThr">0.50</b></span><span>Incidents: <b id="sbInc">0</b></span><span>Backend: <b id="sbBE">…</b></span><span id="sbClock"></span></div>
+<main class="grid">
+  <aside class="col"><div class="panel"><h3 class="ptitle">ATTACK INJECTION BAR <span class="chip">Click to Inject</span></h3><p class="lead">Click any attack scenario below to immediately inject threat traffic into the CAN bus.</p><div id="scn"></div></div></aside>
+  <div class="col" id="ccmid">
+    <div class="dashed" id="parked"><div class="em">🚗</div><h3>VEHICLE IS PARKED</h3><p>Select an attack scenario from the left panel to start the simulation.<br>Choose <b>"Nominal Driving Baseline"</b> for clean driving, or pick any attack to inject threat traffic.</p><div class="steps"><span><b>1</b>Pick a scenario</span><span><b>2</b>Watch the IDS react</span><span><b>3</b>Engage Fail-Safe</span></div></div>
+    <div id="simwrap"><div class="camrow"><button class="btn active" data-v="0">Highway Cam</button><button class="btn" data-v="1">Cabin View</button><button class="btn" data-v="2">Dashboard Zoom</button></div>
+    <section class="panel scene-panel" id="stage">
+      <div class="panel-head"><b id="cam">Exterior camera · highway</b><span>Click the car to zoom in</span></div>
+
+      <svg class="layer" id="ext" viewBox="0 0 960 540" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <linearGradient id="sk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#040b1c"/><stop offset=".7" stop-color="#143e6e"/><stop offset="1" stop-color="#2a6a9c"/></linearGradient>
+          <linearGradient id="bd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef5ff"/><stop offset="1" stop-color="#7f93ad"/></linearGradient>
+          <linearGradient id="bm" x1="0" x2="1"><stop offset="0" stop-color="#fff6c9" stop-opacity=".55"/><stop offset="1" stop-color="#fff6c9" stop-opacity="0"/></linearGradient>
+          <pattern id="dash" width="120" height="8" patternUnits="userSpaceOnUse"><rect width="60" height="6" fill="#dfeaf7"/></pattern>
+          <pattern id="posts" width="120" height="40" patternUnits="userSpaceOnUse"><rect x="50" width="8" height="40" fill="#5b6f88"/></pattern>
+          <path id="hill" d="M0 330Q120 262 240 318T480 312T720 296T960 330V400H0Z"/>
+          <g id="lamp"><rect width="5" height="150" y="-150" fill="#31445e"/><rect width="46" height="5" y="-150" fill="#31445e"/><circle cx="46" cy="-142" r="5" fill="#ffe9a8"/></g>
+        </defs>
+        <rect width="960" height="540" fill="url(#sk)"/>
+        <circle cx="140" cy="90" r="22" fill="#dff0ff" opacity=".85"/>
+        <g class="sc far" fill="#0d2748"><use href="#hill"/><use href="#hill" x="960"/></g>
+        <g class="sc near" fill="#0a1c36"><use href="#hill" x="-300" y="45"/><use href="#hill" x="660" y="45"/><use href="#hill" x="1620" y="45"/></g>
+        <g class="sc pole"><use href="#lamp" x="100" y="372"/><use href="#lamp" x="580" y="372"/><use href="#lamp" x="1060" y="372"/><use href="#lamp" x="1540" y="372"/></g>
+        <rect y="382" width="960" height="158" fill="#18212f"/><rect y="378" width="960" height="6" fill="#2b3a50"/>
+        <rect y="356" width="960" height="8" fill="#6f86a3"/><rect class="sc post" y="352" width="1200" height="40" fill="url(#posts)"/>
+        <rect class="sc dsh" y="446" width="1200" height="8" fill="url(#dash)"/><rect y="505" width="960" height="4" fill="#dfeaf7" opacity=".5"/>
+
+        <g class="atk-only"><line class="flow" x1="488" y1="346" x2="780" y2="122" stroke="#ff526b" stroke-width="2"/>
+          <g transform="translate(770 80)"><rect width="140" height="40" rx="6" fill="#2a0a12" stroke="#ff526b"/><text x="70" y="25" text-anchor="middle" font-size="13" font-weight="700" fill="#ff8a9a" font-family="system-ui" id="extl">ROGUE UPLINK</text></g></g>
+
+        <g transform="translate(330 360)"><g class="bob">
+          <ellipse cx="150" cy="113" rx="156" ry="7" fill="#000" opacity=".45"/>
+          <polygon points="298,58 520,34 520,104" fill="url(#bm)"/>
+          <rect x="50" y="-11" width="148" height="4" rx="2" fill="#26354b"/><rect x="62" y="-9" width="5" height="4" fill="#1a2536"/><rect x="180" y="-9" width="5" height="4" fill="#1a2536"/>
+          <path d="M4 92V62Q4 52 14 50L26 48L32 8Q34 -4 48 -6H198Q212 -6 220 2L262 46L286 50Q298 54 298 66V92Z" fill="url(#bd)"/>
+          <path d="M4 80H298V92H4Z" fill="#1a2434"/>
+          <rect x="12" y="68" width="274" height="2.5" rx="1" fill="#6ee7c8"/>
+          <path d="M40 38L44 5Q45 1 50 1H112V38Z" fill="#0b1b33"/><path d="M120 38V1H198Q206 1 212 6L246 38Z" fill="#0b1b33"/>
+          <rect x="58" y="12" width="16" height="22" rx="5" fill="#18283f"/><rect x="84" y="12" width="16" height="22" rx="5" fill="#18283f"/>
+          <rect x="138" y="10" width="16" height="26" rx="5" fill="#18283f"/>
+          <path d="M208 20L197 38" stroke="#2c3f5c" stroke-width="3" stroke-linecap="round"/>
+          <path d="M126 38L150 1H162L138 38ZM174 38L196 1H202L182 38Z" fill="#fff" opacity=".08"/>
+          <path d="M116 38V86M218 46V86" stroke="#4a5b73" stroke-width="1.2" fill="none"/>
+          <rect x="94" y="44" width="18" height="4" rx="2" fill="#1a2434"/><rect x="172" y="44" width="18" height="4" rx="2" fill="#1a2434"/>
+          <path d="M216 36h14q4 0 4 4v6q0 4-4 4h-12z" fill="#0b1626"/>
+          <path d="M150 -6L158 -14L172 -6Z" fill="#0b1626" stroke="#6ee7c8"/>
+          <g class="atk-only" fill="none" stroke="#ff526b" stroke-width="2"><path d="M150-20q8-7 16 0"/><path d="M144-27q14-12 28 0"/></g>
+          <rect x="3" y="54" width="9" height="14" rx="3" fill="#ff526b"/><path d="M27 44L31 14" stroke="#ff526b" stroke-width="3" stroke-linecap="round"/>
+          <rect x="286" y="54" width="12" height="8" rx="3" fill="#fff6c9"/><path d="M292 66H298V80H290Z" fill="#0b1626"/><rect x="286" y="82" width="8" height="4" rx="2" fill="#a8c8ff" opacity=".8"/><rect x="262" y="86" width="36" height="5" rx="2" fill="#2a3b52"/>
+          <circle cx="72" cy="85" r="35" fill="#070b12"/><circle cx="232" cy="85" r="35" fill="#070b12"/>
+          <circle cx="72" cy="85" r="36" fill="none" stroke="#1a2434" stroke-width="4"/><circle cx="232" cy="85" r="36" fill="none" stroke="#1a2434" stroke-width="4"/>
+          <circle cx="72" cy="85" r="29" fill="#05080e"/><circle cx="232" cy="85" r="29" fill="#05080e"/>
+          <g class="wh"><circle cx="72" cy="85" r="22" fill="#0d1420"/><circle cx="72" cy="85" r="16" fill="#2a3b52"/><path d="M72 70V100M57 85H87M61.4 74.4L82.6 95.6M82.6 74.4L61.4 95.6" stroke="#8da8c8" stroke-width="2"/><circle cx="72" cy="85" r="4" fill="#0b1424"/></g>
+          <g class="wh"><circle cx="232" cy="85" r="22" fill="#0d1420"/><circle cx="232" cy="85" r="16" fill="#2a3b52"/><path d="M232 70V100M217 85H247M221.4 74.4L242.6 95.6M242.6 74.4L221.4 95.6" stroke="#8da8c8" stroke-width="2"/><circle cx="232" cy="85" r="4" fill="#0b1424"/></g>
+        </g></g>
+        <circle class="ring" cx="485" cy="400" r="100" fill="rgba(82,220,255,.04)" stroke="#6ee7c8" stroke-dasharray="6 6" stroke-width="2" role="button" tabindex="0" aria-label="Zoom into the cabin" id="ring"/>
+      </svg>
+
+      <svg class="layer" id="int" viewBox="0 0 960 540" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <defs>
+          <linearGradient id="is" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0a1a3a"/><stop offset="1" stop-color="#3a78a8"/></linearGradient>
+          <linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#26324a"/><stop offset=".3" stop-color="#121b2b"/><stop offset="1" stop-color="#05080f"/></linearGradient>
+          <linearGradient id="pil" x1="0" x2="1"><stop offset="0" stop-color="#0b1220"/><stop offset=".5" stop-color="#1c2740"/><stop offset="1" stop-color="#0b1220"/></linearGradient>
+          <linearGradient id="hl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b2538"/><stop offset="1" stop-color="#0a101c"/></linearGradient>
+          <linearGradient id="door" x1="0" x2="1"><stop offset="0" stop-color="#0a1020"/><stop offset="1" stop-color="#1b2840"/></linearGradient>
+          <linearGradient id="leat" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#26354d"/><stop offset="1" stop-color="#0a1222"/></linearGradient>
+          <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".12"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".05"/></linearGradient>
+          <radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".6"/></radialGradient>
+          <g id="sideTop">
+            <path d="M24 196Q26 180 46 178L76 178Q80 196 70 212Q48 216 28 208Z" fill="#0a1220" stroke="#2a3d5a"/><rect x="34" y="183" width="34" height="22" rx="7" fill="#1d3552"/>
+            <path d="M0 0H30L16 238H0Z" fill="url(#pil)"/>
+            <path d="M108 30L162 38L98 240H56Z" fill="url(#pil)" stroke="#16243a"/><path d="M132 40L82 232" stroke="#2c3f5c" stroke-width="1.2" stroke-dasharray="5 4"/>
+            <rect x="82" y="96" width="9" height="26" rx="4" fill="#0f1a2c" stroke="#2a3d5a" transform="rotate(14 86 109)"/>
+          </g>
+          <g id="sideDoor">
+            <path d="M0 236L76 240Q96 330 86 540H0Z" fill="url(#door)" stroke="#1c2a40"/>
+            <path d="M0 236L76 240" stroke="#8da8c8" stroke-width="2" opacity=".5"/>
+            <path class="amb" d="M4 256L72 260" fill="none" stroke-width="2.5"/>
+            <g fill="#050a14" stroke="#243650"><ellipse cx="34" cy="305" rx="22" ry="14"/></g><path d="M16 305H52M18 299H50M18 311H50" stroke="#243650"/>
+            <rect x="0" y="342" width="74" height="46" rx="14" fill="#16233a" stroke="#243650"/>
+            <g fill="#0a1220" stroke="#2f4562"><rect x="8" y="350" width="10" height="7" rx="2"/><rect x="22" y="350" width="10" height="7" rx="2"/><rect x="36" y="350" width="10" height="7" rx="2"/><rect x="50" y="350" width="10" height="7" rx="2"/></g>
+            <rect x="8" y="396" width="52" height="7" rx="3.5" fill="#26364e"/>
+            <rect x="4" y="425" width="68" height="95" rx="10" fill="#070c16" stroke="#1c2a40"/>
+          </g>
+        </defs>
+        <g id="intG">
+          <rect width="960" height="240" fill="url(#is)"/>
+          <path d="M0 160Q150 118 300 150T600 145T960 150V240H0Z" fill="#0c2542"/>
+          <rect y="150" width="960" height="90" fill="#101a29"/>
+          <polygon points="470,150 490,150 780,240 190,240" fill="#1b2638"/>
+          <line class="ln" x1="478" y1="150" x2="330" y2="240" stroke="#dfeaf7" stroke-width="3"/>
+          <line x1="492" y1="150" x2="740" y2="240" stroke="#dfeaf7" stroke-width="3" opacity=".6"/>
+          <g transform="translate(470 151)"><rect width="18" height="9" rx="2" fill="#2a3b52"/><rect x="2" y="3" width="3" height="3" fill="#ff526b"/><rect x="13" y="3" width="3" height="3" fill="#ff526b"/></g>
+          <path d="M120 0H430L300 236H60Z" fill="url(#glass)"/>
+          <path d="M610 0H760L840 236H690Z" fill="#fff" opacity=".04"/>
+          <path d="M300 228L170 206M700 228L560 206" stroke="#05080f" stroke-width="4" stroke-linecap="round"/>
+          <use href="#sideTop"/><use href="#sideTop" transform="translate(960 0) scale(-1 1)"/>
+          <path d="M0 0H960V34Q480 62 0 34Z" fill="url(#hl)"/>
+          <rect x="172" y="2" width="206" height="30" rx="9" fill="#141e2e" stroke="#243650"/><rect x="182" y="8" width="186" height="16" rx="5" fill="#0b1220"/>
+          <rect x="582" y="2" width="206" height="30" rx="9" fill="#141e2e" stroke="#243650"/><rect x="592" y="8" width="186" height="16" rx="5" fill="#0b1220"/>
+          <rect x="420" y="26" width="120" height="30" rx="10" fill="#0e1727" stroke="#2a4a44"/>
+          <ellipse cx="447" cy="41" rx="11" ry="6" fill="#86b6e6" opacity=".55"/><ellipse cx="513" cy="41" rx="11" ry="6" fill="#86b6e6" opacity=".55"/><rect x="468" y="35" width="24" height="12" rx="5" fill="#12385f"/><circle class="atk-only" cx="480" cy="41" r="4" fill="#ff526b"/>
+          <rect x="477" y="56" width="6" height="14" fill="#0a101c"/><rect x="436" y="68" width="88" height="26" rx="11" fill="#060b14" stroke="#2a3d5a"/><rect x="441" y="72" width="78" height="18" rx="8" fill="#1a3350"/><path d="M446 84L480 76L514 84" stroke="#3d6389" fill="none"/>
+          <path d="M0 238Q480 200 960 238V540H0Z" fill="url(#dg)"/>
+          <path d="M0 252Q480 214 960 252" fill="none" stroke="#3b4d68" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <path d="M0 238Q480 200 960 238" fill="none" stroke="#6ee7c8" opacity=".35"/>
+          <path d="M0 304Q480 276 960 304V540H0Z" fill="#070c18" opacity=".6"/>
+          <path class="amb" d="M0 300Q190 292 366 286M594 286Q770 292 960 300" fill="none" stroke-width="2.5"/>
+          <g fill="#050a14" stroke="#243650"><rect x="285" y="252" width="62" height="12" rx="4"/><rect x="805" y="252" width="62" height="12" rx="4"/></g>
+          <path d="M292 258H340M812 258H860" stroke="#2f4562" stroke-width="1.5" stroke-dasharray="3 3"/>
+          <path d="M130 294H340V346Q340 352 332 352H138Q130 352 130 346Z" fill="#0a1220" stroke="#26364e"/><rect x="204" y="302" width="62" height="5" rx="2.5" fill="#1d3250"/>
+          <rect x="366" y="238" width="228" height="130" rx="9" fill="#050a14" stroke="#2a4a44"/>
+          <foreignObject x="372" y="244" width="216" height="118"><div xmlns="http://www.w3.org/1999/xhtml" class="info">
+            <div class="ok-view"><div class="ib"><span>21:42</span><span>5G</span></div>
+              <svg viewBox="0 0 216 70"><rect width="216" height="70" fill="#0b2a4a"/><path d="M0 62C60 56 90 22 216 14" stroke="#6ee7c8" stroke-width="4" fill="none"/><circle cx="108" cy="37" r="5" fill="#fff"/></svg>
+              <div class="ib"><span>Evening Drive</span><span>Highway · 82 km/h</span></div></div>
+            <div class="gok">SAFEGUARD ON</div>
+            <div class="bad-view"><b id="ivt">⚠ UNDER ATTACK</b><span id="iv1"></span><span id="iv2"></span><span id="iv3"></span></div>
+          </div></foreignObject>
+          <rect x="366" y="374" width="228" height="22" rx="7" fill="#080e1a" stroke="#1f2d44"/>
+          <circle cx="388" cy="385" r="7" fill="#14223a" stroke="#2f4562"/><circle cx="572" cy="385" r="7" fill="#14223a" stroke="#2f4562"/>
+          <g fill="#12203a" stroke="#2f4562"><rect x="406" y="380" width="20" height="10" rx="3"/><rect x="432" y="380" width="20" height="10" rx="3"/><rect x="508" y="380" width="20" height="10" rx="3"/><rect x="534" y="380" width="20" height="10" rx="3"/></g>
+          <rect x="465" y="377" width="30" height="16" rx="4" fill="#3a0a14" stroke="#ff526b" opacity=".85"/><path d="M480 380L487 390H473Z" fill="none" stroke="#fff" stroke-width="1.2"/>
+          <path d="M620 236Q703 224 786 236V242H620Z" fill="#0a1220" stroke="#243650"/>
+          <rect x="628" y="238" width="150" height="62" rx="7" fill="#050a14" stroke="#2a4a44"/>
+          <foreignObject x="632" y="242" width="142" height="54"><div xmlns="http://www.w3.org/1999/xhtml" class="cluster"><b id="clv">82</b><em class="cl-ok">km/h<br>ADAS ready</em><em class="cl-bad" id="clb">⚠ ECU FAULT</em></div></foreignObject>
+          <rect x="672" y="398" width="62" height="14" rx="6" fill="#0a1220" opacity=".9"/>
+          <g transform="translate(703 365)">
+            <rect x="-124" y="-8" width="46" height="8" rx="4" fill="#0e1828" stroke="#243650"/><rect x="78" y="-8" width="46" height="8" rx="4" fill="#0e1828" stroke="#243650"/>
+            <ellipse rx="80" ry="58" fill="none" stroke="#0b1424" stroke-width="14"/><ellipse rx="86" ry="63" fill="none" stroke="#2f4562" stroke-width="1"/><ellipse rx="80" ry="58" fill="none" stroke="#4a6080" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>
+            <path d="M-72 4H-20M20 4H72M0 20V56" stroke="#0b1424" stroke-width="10" fill="none"/>
+            <circle cx="-46" cy="4" r="4" fill="#1f3350"/><circle cx="46" cy="4" r="4" fill="#1f3350"/><rect x="-12" y="38" width="24" height="5" rx="2" fill="#1f3350"/>
+            <circle r="21" fill="#0b1424" stroke="#2f4562"/><text y="5" text-anchor="middle" font-size="14" font-weight="800" fill="#6ee7c8" font-family="system-ui">V</text>
+            <rect x="-86" y="-24" width="8" height="26" rx="3" fill="#16233a" transform="rotate(-10 -82 -10)"/><rect x="78" y="-24" width="8" height="26" rx="3" fill="#16233a" transform="rotate(10 82 -10)"/>
+          </g>
+          <path d="M428 400H542L566 540H404Z" fill="#0a1424" stroke="#16304d"/>
+          <g id="lever" style="transition:transform .25s ease"><circle cx="485" cy="412" r="11" fill="#050a14" stroke="#2a4a44"/><circle cx="485" cy="412" r="6" fill="#1a2b45"/><path d="M485 401V386" stroke="#16304d" stroke-width="4"/></g>
+          <g font-family="system-ui" font-weight="700" text-anchor="middle" fill="#6f8bb0" font-size="10"><text id="gP" x="455" y="438">P</text><text id="gR" x="473" y="438">R</text><text id="gN" x="491" y="438">N</text><text id="gD" x="509" y="438">D</text></g><text id="gLbl" x="508" y="410" font-size="9" font-weight="800" fill="#ff526b" font-family="system-ui" visibility="hidden" style="paint-order:stroke;stroke:#050a14;stroke-width:3px">SPOOFED SHIFT</text>
+          <circle cx="458" cy="486" r="12" fill="#050a14" stroke="#243650"/><circle cx="512" cy="486" r="12" fill="#050a14" stroke="#243650"/>
+          <rect x="426" y="508" width="118" height="32" rx="12" fill="#101c30" stroke="#243650"/><path d="M440 524H530" stroke="#3b4d68" stroke-dasharray="5 4"/>
+          <use href="#sideDoor"/><use href="#sideDoor" transform="translate(960 0) scale(-1 1)"/>
+          <g fill="url(#leat)" stroke="#1b3350">
+            <rect x="184" y="462" width="206" height="100" rx="44"/><rect x="232" y="414" width="116" height="84" rx="30"/>
+            <rect x="590" y="462" width="246" height="100" rx="44"/><rect x="652" y="414" width="116" height="84" rx="30"/>
+          </g>
+          <g fill="none" stroke="#3b4d68" stroke-dasharray="5 4"><path d="M262 424V490M318 424V490M682 424V490M738 424V490"/></g>
+          <path d="M170 424L296 552" stroke="#1d2840" stroke-width="15"/><path d="M170 424L296 552" stroke="#3a4a63" stroke-width="2"/>
+          <path d="M806 424L690 548" stroke="#1d2840" stroke-width="15"/><path d="M806 424L690 548" stroke="#3a4a63" stroke-width="2"/><rect x="646" y="536" width="22" height="10" rx="3" fill="#6f8bb0"/>
+          
+          
+          
+          
+          
+          <rect width="960" height="540" fill="url(#vig)" pointer-events="none"/>
+        </g>
+      </svg>
+
+      <div class="tint"></div>
+      <div class="alertpill" role="alert"><span>⚠ DRIVER ALERT · <b id="apn">Cyber attack</b> detected</span><button id="viewcab">View cabin</button></div>
+      <div class="redbox" role="alert"><h4>▲ VEHICLE UNDER ATTACK</h4><dl>
+        <dt>Attack</dt><dd id="rba" style="color:#ff8a9a;font-weight:800"></dd>
+        <dt>Vector</dt><dd id="rbv">Telematics 4G → CAN gateway</dd>
+        <dt>Target</dt><dd id="rbg">CAN 0x244 · steering assist, display</dd>
+        <dt>Spoofed frames</dt><dd id="rbf">0</dd>
+        <dt>Elapsed</dt><dd id="rbt">0.0 s</dd>
+        <dt>Severity</dt><dd>CRITICAL</dd></dl>
+        <p>Engage Fail-Safe to isolate the gateway and restore normal operation.</p></div>
+      <div class="safechip">Fail-safe active · gateway filtering CAN traffic</div>
+      <div class="actual" id="actual"><small>ACTUAL SPEED</small><b><span id="acSp">0</span> km/h</b><em>Dashboard shows <span id="acFake">0</span> km/h <u>(spoofed)</u></em></div>
+      <div class="scene-foot"><span>Simulated vehicle, not real data</span><span id="hint">Use Cabin or Dashboard zoom to see the screens</span></div>
+    </section>
+
+    <div class="banner" id="banner" role="alert"><i></i><b>ATTACK DETECTED IN STREAM:</b><span id="bn"></span></div>
+    <div class="tiles">
+      <div class="stat"><label>Vehicle speed</label><strong class="accent"><span id="spd">82</span><small>km/h</small></strong></div>
+      <div class="stat"><label>CAN bus integrity</label><strong id="bus" class="accent">100%</strong></div>
+      <div class="stat"><label>Threat level</label><strong id="sThr" class="accent">LOW</strong></div>
+      <div class="stat"><label>Fail-safe</label><strong id="sGuard" class="warn">OFF</strong></div>
+    </div>
+    </div>
+    <div class="panel pad" id="netp"><h3 class="ptitle">LIVE NETWORK TELEMETRY <span class="chip" id="nLat">Latency: –</span></h3>
+      <div class="vs2"><div class="stat"><label>Messages Processed</label><strong id="nMsgs">0</strong></div><div class="stat"><label>Bus Throughput</label><strong><span id="nThr">0</span><small>msg/s</small></strong></div>
+      <div class="stat"><label>Active Arbitration IDs</label><strong id="nIds">0</strong></div><div class="stat"><label>Threats Detected</label><strong class="danger" id="nThreat">0</strong></div></div></div>
+    <div class="panel pad"><h3 class="ptitle">LIVE CAN STREAM (WITH REAL-TIME ATTACK HIGHLIGHTING) <span class="chip" id="nBuf">0 frames buffered</span></h3><div id="canLive"></div></div>
+    <div class="panel pad"><h3 class="ptitle">CAN ID ARBITRATION HISTOGRAM <span class="chip">Top IDs by Volume</span></h3><div class="hist" id="hist"></div><div class="hlab" id="hlab"></div></div>
+  </div>
+  <aside class="col">
+    <div class="dashed" id="ready"></div>
+    <div class="panel pad"><h3 class="ptitle">VEHICLE DETECTION TWIN <span class="chip dt-chip">Nominal</span></h3><div class="dt-alert"></div><div class="ecuring dt-ring"></div><div class="vs2 dt-vals"></div><button class="btn wide" data-ss="x">🛡️ Command Simulated Safe-Stop</button></div>
+    <div class="panel pad"><h3 class="ptitle">ACTIVE INCIDENTS <span class="chip" id="incN">0 Recorded</span></h3><div id="incMini"></div></div>
+    <div class="panel"><h3 class="ptitle">VEHICLE SYSTEMS <span class="chip" id="chip">Secure</span></h3><div id="sys"></div><button class="btn wide" id="gbtn2">Engage Fail-Safe</button></div>
+    <div class="panel"><h3 class="ptitle">EVENT LOG <span class="chip">Live</span></h3><div id="log"></div></div>
+  </aside>
+  <div class="footerline">CAV SHIELD · Educational simulation. No real attack code or vehicle data is used.</div>
+</main>
+<section class="view" id="v-twin" hidden><div id="twinhost"></div><div class="vs2" style="margin-top:16px"><div class="panel pad"><h3 class="ptitle">CYBER-PHYSICAL DIGITAL TWIN <span class="chip dt-chip">Nominal Operation</span></h3><p class="lead">Simulated ECU network status. Attacked ECUs light up in <b>bright red</b>.</p><div class="dt-alert"></div><div class="ecuring dt-ring"></div><div class="vs2 dt-vals"></div><button class="btn wide" data-ss="x">🛡️ Command Simulated Safe-Stop</button><p class="lead" id="dtNote"></p></div>
+<div class="panel pad"><h3 class="ptitle">SIMULATED SAFE-STOP ACTUATION <span class="chip">Safety Mitigation Layer</span></h3><p class="lead">When activated, the vehicle derates propulsion torque, limits speed to 18 km/h, commands hazard lights and isolates untrusted CAN streams.</p>
+<div class="panel pad"><b>Current Status:</b> <span id="ssStat" class="accent"></span><div class="btns" style="margin-top:10px"><button class="btn hot" data-ss="x">🛡️ Activate Safe-Stop Fail-Safe</button><button class="btn" id="ssRestore">Restore Normal Drive</button></div></div>
+<h3 class="ptitle" style="margin-top:16px">ECU HEALTH &amp; INTRUSION STATE</h3><div class="vs2" id="ecuHealth"></div></div></div></section>
+<section class="view" id="v-v2x" hidden><div class="two"><div class="panel pad"><h3 class="ptitle">V2X LINK STATUS <span class="chip" id="v2xChip"></span></h3><div id="v2xNodes"></div><div class="btns"><button class="btn" id="v2xVerify">Toggle PKI signature check</button></div><h3 class="ptitle">INJECT V2X ATTACK</h3><div class="btns" id="v2xBtns"></div></div><div class="panel pad"><h3 class="ptitle">LIVE V2X MESSAGE FEED <span class="chip">Live</span></h3><div id="v2xFeed"></div></div></div> <div class="panel pad" style="margin-top:16px"><h3 class="ptitle">V2X COOPERATIVE SAFETY MONITOR (BSM) <span class="chip">Vehicle-to-Everything</span></h3><p class="lead">Inspects incoming Basic Safety Messages (BSM) over DSRC/C-V2X: station-ID consistency, timestamp freshness and kinematic limits (speed/acceleration bounds).</p>
+<div class="btns"><button class="btn warn" data-bsm="spoof">📡 Simulate Identity Spoof</button><button class="btn warn" data-bsm="replay">⏱ Simulate Replay Attack</button><button class="btn warn" data-bsm="kin">🚀 Simulate Kinematic Violation</button><button class="btn warn" data-bsm="mal">⚠ Simulate Malformed Frame</button><button class="btn primary" data-bsm="ok">🟢 Send Normal BSM</button></div>
+<h3 class="ptitle" style="margin-top:14px">V2X MESSAGE STREAM <span class="chip" id="bsmN">0 received</span></h3><div id="bsmTbl"></div></div></section>
+<section class="view" id="v-ds" hidden><div class="vs2" style="margin-bottom:16px"><div class="panel pad"><h3 class="ptitle">PRELOADED HCRL DATASETS <span class="chip">Ready to Stream</span></h3><p class="lead">Click a dataset to load it and stream CAN frames through the detection pipeline.</p><div id="hcrl"></div>
+<h3 class="ptitle" style="margin-top:14px">UPLOAD CUSTOM CAN CSV LOG</h3><input type="file" id="csvIn" accept=".csv" class="btn" style="width:100%"><p class="lead">Columns: timestamp,can_id,dlc,data,label</p></div>
+<div class="panel pad"><h3 class="ptitle">FULL CAN MESSAGE STREAM <span class="chip" id="canFullN">0 frames buffered</span></h3><div id="canFull"></div></div></div><div class="two"><div class="panel pad"><h3 class="ptitle">CAN DATASETS</h3><div id="dsList"></div></div><div class="panel pad"><h3 class="ptitle">FRAME PREVIEW <span class="chip" id="dsName"></span></h3><div class="btns"><button class="btn" id="dsReplay">▶ Replay on bus</button><button class="btn" id="dsCsv">⬇ Download CSV</button></div><div id="dsTbl"></div></div></div></section>
+<section class="view" id="v-inc" hidden><div id="incCards" style="display:grid;gap:12px;margin-bottom:16px"></div><div class="panel pad" id="explainBox" hidden></div><div class="panel pad"><h3 class="ptitle">INCIDENT LOG <span class="chip" id="incN2"></span></h3><div class="btns"><button class="btn active" data-f="All">All</button><button class="btn" data-f="Active">Active</button><button class="btn" data-f="Mitigated">Mitigated</button><button class="btn" data-f="Blocked">Blocked</button><button class="btn" data-f="Resolved">Resolved</button><button class="btn" id="incExp">⬇ Export JSON</button><button class="btn hot" id="incClr">Clear all</button></div><div id="incTbl"></div></div></section>
+<section class="view" id="v-lab" hidden><div class="two"><div class="panel pad"><h3 class="ptitle">IDS DETECTORS</h3><div id="detList"></div><div class="gline">Alert threshold <b id="thV"></b></div><input type="range" id="th" min="10" max="90" value="50" style="width:100%"><div class="btns"><button class="btn" id="runAll">▶ Run all scenarios</button></div><div id="labRes"></div></div><div class="panel pad"><h3 class="ptitle">LIVE ANOMALY SCORE</h3><svg viewBox="0 0 400 140" style="width:100%;background:#0a0e14;border-radius:10px"><line id="thLine" x1="0" x2="400" stroke="#ffae48" stroke-dasharray="4 4"/><polyline id="scoreLn" fill="none" stroke="#6ee7c8" stroke-width="2"/></svg><p class="lead">Dashed line = alert threshold. Start a scenario to see the score rise.</p></div></div><div class="panel pad" style="margin-top:16px"><h3 class="ptitle">HYBRID ML ARCHITECTURE <span class="chip">4-Tier Defense</span></h3>
+<div class="vs2 s4"><div class="arch"><b>1. Supervised RF + XGBoost</b><span>Causal window statistics to identify known Car-Hacking attacks.</span></div><div class="arch"><b>2. LSTM Autoencoder</b><span>Sequence reconstruction loss on normal CAN frame sequences. (Not implemented yet.)</span></div><div class="arch"><b>3. Isolation Forest</b><span>Unsupervised outlier scoring for unclassified anomalies.</span></div><div class="arch"><b>4. Deterministic Rule Engine</b><span>Zero-latency checks for DoS 0x000 flood and invalid arbitration IDs.</span></div></div>
+<h3 class="ptitle" style="margin-top:16px">LIVE SESSION DETECTION COUNTS <span class="chip">Live Session Data</span></h3><div class="vs2 s4" id="labCnt"></div><div id="labTypes" style="margin-top:10px"></div>
+<h3 class="ptitle" style="margin-top:16px">MODEL EVALUATION (HELD-OUT TEST SPLIT) <span class="chip">Supervised Random Forest</span></h3><p class="lead" id="evalNote">Reference metrics (static demo values). Train the model on the HCRL dataset to replace them with real held-out results.</p><div class="vs2 s3" id="labEval"></div>
+<h3 class="ptitle" style="margin-top:16px">CONFUSION MATRIX</h3><div id="labCm" style="overflow-x:auto"></div>
+<div class="btns" style="margin-top:12px"><button class="btn primary" id="retrain">⚡ Retrain Models on Synthetic Dataset</button></div><p class="lead" id="retrainNote"></p></div></section>
+<section class="view" id="v-tel" hidden><div class="panel pad" style="margin-bottom:16px"><h3 class="ptitle">SPEED &amp; RPM MONITORING &amp; ANOMALOUS ACTIVITY DATABASE <span class="chip" id="dbChip">Local session</span></h3><p class="lead">Persistent storage of speed, RPM telemetry and detected anomalous activity (saved to the backend DB when online).</p>
+<div class="vs2 s4"><div class="stat"><label>Stored Telemetry Rows</label><strong id="tsRows">0</strong></div><div class="stat"><label>Peak Monitored Speed</label><strong class="accent"><span id="tsSp">0</span><small>km/h</small></strong></div><div class="stat"><label>Peak Engine RPM</label><strong class="warn"><span id="tsRpm">0</span><small>RPM</small></strong></div><div class="stat"><label>Anomalous Events Logged</label><strong class="danger" id="tsAn">0</strong></div></div>
+<div class="btns" style="margin-top:12px"><button class="btn" id="dbRefresh">🔄 Refresh Data</button><button class="btn" id="dbPrune">🧹 Prune Old Logs</button></div></div><div class="two"><div class="panel pad"><h3 class="ptitle">STORED TELEMETRY <span class="chip" id="telN"></span></h3><div class="btns"><button class="btn" id="telRec">⏸ Pause recording</button><button class="btn" id="telCsv">⬇ Export CSV</button><button class="btn hot" id="telClr">Clear</button></div><svg viewBox="0 0 400 120" style="width:100%;background:#0a0e14;border-radius:10px"><polyline id="tl1" fill="none" stroke="#6ee7c8" stroke-width="2"/><polyline id="tl2" fill="none" stroke="#ffae48" stroke-width="2"/><polyline id="tl3" fill="none" stroke="#ff4d63" stroke-width="2"/></svg><p class="lead"><span style="color:#6ee7c8">speed</span> · <span style="color:#ffae48">bus integrity</span> · <span style="color:#ff4d63">anomaly score</span></p><div id="telTbl"></div></div><div class="panel pad"><h3 class="ptitle">STORED ANOMALIES <span class="chip" id="anN"></span></h3><div id="anTbl"></div></div></div></section>
+<section class="view" id="v-pipe" hidden><div class="vhead"><h2>Attack-Prevention Pipeline</h2><p>How each attack travels from the CAN bus to detection, the Fail-Safe response and the stored audit trail. Stages light up live as a scenario runs.</p></div>
+<div class="panel pad" style="margin-bottom:16px"><h3 class="ptitle">ATTACK STORY · HOW THE CAR SURVIVED <span class="outcome idle" id="stOut">NO ATTACK YET</span></h3>
+<svg id="stFlow" viewBox="0 0 760 130" style="width:100%;background:#0a0e14;border-radius:10px"></svg>
+<div class="sumrow" id="stSum"></div>
+<div class="btns" style="margin-bottom:12px"><button class="btn primary" id="stReplay">▶ Replay story line by line</button><span class="lead" style="margin:0;align-self:center">Launch an attack from the Command Center, then watch each step here.</span></div>
+<div id="stTl"></div></div>
+<div class="vs2"><div class="panel pad"><h3 class="ptitle">DETECTION → FAIL-SAFE PIPELINE <span class="chip" id="pipeChip">Idle</span></h3><div class="pipe" id="pipeList"></div></div>
+<div class="panel pad"><h3 class="ptitle">PIPELINE EVENT LOG <span class="chip" id="pipeBE">Backend –</span></h3><div id="pipeLog"></div><div class="btns" style="margin-top:12px"><button class="btn" id="pipeRep">⬇ Download prevention report (JSON)</button></div></div></div></section>
+<div class="toast" id="toast"></div>
+<script>
+const $=s=>document.querySelector(s),B=document.body;
+let atk=false,grd=false,view=0,t0=0,timers=[],cur={m:0};
+const DET={rate:'Frame-rate monitor',range:'Signal-range checker',entropy:'Payload entropy model',whitelist:'ID whitelist filter'},detOn={rate:1,range:1,entropy:1,whitelist:1};
+let thr=.5,sel=-1,run=false,score=.05,lvl=.04,incs=[],tel=[],ans=[],sch=[],rec=true,incF='All',dsSel=-1,pki=true,seq=0;
+const sys=[['Telematics unit','tel'],['CAN gateway','gw'],['Infotainment','ivi'],['Cluster & ADAS','adas']];
+const bad={tel:['BREACHED','bad'],gw:['SPOOFED','bad'],ivi:['COMPROMISED','bad'],adas:['DEGRADED','warn']};
+$('#sys').innerHTML=sys.map(s=>`<div class="statusrow"><span>${s[0]}</span><span class="pill ok" id="${s[1]}">SECURE</span></div>`).join('');
+const S=[
+['CAN DoS Flood (ID 0x000)','High-rate dominant 0x000 frame injection saturating arbitration layer.','OBD-II → CAN bus','CAN arbitration · all ECUs','CAN_DOS — the bus is saturated with 0x000 frames!','CAN INJECTOR','CAN BUS FLOODED','Dominant 0x000 frames flooding','ECUs cannot send messages','Pull over safely','⚠ CAN BUS<br>OVERLOAD',1,'rate','CRITICAL'],
+['RPM Gauge Spoofing (ID 0x316)','Spoofed tachometer engine speed frames causing false dashboard readings.','Injected frames on CAN bus','CAN 0x316 · tachometer, cluster','RPM_SPOOFING — tachometer readings are false!','RPM SPOOFER','RPM DATA SPOOFED','Fake frames on ID 0x316','Tachometer shows false RPM','Do not trust the gauge','⚠ RPM DATA<br>FALSE',1,'range','HIGH'],
+['Gear Status Spoofing (ID 0x43F)','Corrupted transmission state injection commanding Reverse/Park at highway speed.','Injected frames on CAN bus','CAN 0x43F · transmission','GEAR_SPOOFING — transmission state is corrupted!','GEAR INJECTOR','GEAR STATE SPOOFED','Reverse/Park commanded at 82 km/h','Transmission state invalid','Keep a firm grip, brake gently','⚠ GEAR STATE<br>INVALID',0,'range','CRITICAL'],
+['Fuzzy Random-ID Injection','Random CAN IDs and random payload bytes disrupting multiple vehicle ECUs.','OBD-II → CAN bus','Multiple ECUs','FUZZY_INJECTION — random frames are hitting multiple ECUs!','CAN FUZZER','FUZZING DETECTED','Random IDs and payloads','Multiple ECUs misbehaving','Drive with extra care','⚠ MULTIPLE ECU<br>FAULTS',1,'entropy','HIGH'],
+['Velocity Spoofing (Simulated ID)','Unauthorized speed frame manipulation tricking ADAS / cruise controllers.','Spoofed speed frames','Cluster speed, cruise controller','SPEED_SPOOFING — dashboard readings are not trustworthy!','FAKE SPEED FRAMES','SPEED SPOOFING','Cluster shows a false speed','Real speed is about 82 km/h','Do not trust the cluster','⚠ SPEED DATA<br>FALSE',2,'range','HIGH'],
+['Brake Command Tampering','Unauthorized deceleration command bursts injected on the chassis bus.','Chassis CAN injection','Brake ECU · chassis bus','BRAKE_TAMPERING — unauthorized brake commands on the bus!','BRAKE INJECTOR','BRAKE COMMANDS INJECTED','Unauthorized deceleration bursts','Sudden braking possible','Increase following distance','⚠ BRAKE SYSTEM<br>CHECK',0,'whitelist','CRITICAL'],
+['Telematics Hijack','Rogue 4G uplink takes over the telematics unit and pivots into the gateway.','Telematics 4G → CAN gateway','CAN 0x244 · steering assist, display','TELEMATICS_HIJACK — gateway session is compromised!','ROGUE UPLINK','TELEMATICS HIJACKED','Rogue 4G uplink connected','Remote commands being accepted','Connected services disabled','⚠ REMOTE ACCESS<br>UNKNOWN UPLINK',0,'whitelist','CRITICAL'],
+['Infotainment Takeover','Attacker overrides the head unit and the alerts shown to the driver.','Head unit → cluster link','Infotainment, instrument cluster','IVI_TAKEOVER — driver display is controlled by an attacker!','HEAD-UNIT EXPLOIT','HEAD UNIT HIJACKED','Display controlled by attacker','Navigation and media locked','Ignore on-screen prompts','⚠ HEAD UNIT<br>COMPROMISED',0,'whitelist','HIGH'],
+['Nominal Driving Baseline','Clean driving with no injected traffic. Use it to check the IDS for false positives.','-','-','','','','','','','',0,'rate','NONE']
+].map(a=>({n:a[0],d:a[1],v:a[2],g:a[3],t:a[4],u:a[5],h:a[6],a:a[7],b:a[8],c:a[9],k:a[10],m:a[11],det:a[12],sev:a[13]}));S[8].base=true;
+$('#scn').innerHTML=S.map(x=>`<button class="scn" title="${x.base?'Start clean driving':'Inject this attack'}"><div class="row"><b>${x.n}</b><small class="sev ${x.sev}">${x.sev==='NONE'?'SAFE':x.sev}</small></div><span>${x.d}</span><em>${x.base?'▶ Start baseline':'⚡ Inject attack'}</em></button>`).join('');
+$('#scnSel').innerHTML='<option value="">⬅ Select a scenario</option>'+S.map((x,i)=>`<option value="${i}">${x.n}</option>`).join('');
+document.querySelectorAll('#scn .scn').forEach((b,i)=>b.onclick=()=>launch(i));
+const cams=['Exterior camera · highway','Cabin camera · wide view','Dashboard camera · zoom'];
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('show'),2600)}
+function log(title,detail,col){const e=document.createElement('div'),t=new Date().toTimeString().slice(0,8);e.className='event';e.innerHTML=`<i class="event-dot" style="background:${col};box-shadow:0 0 8px ${col}"></i><div><b>${title}</b>${detail}<br><small>${t}</small></div>`;const l=$('#log');l.prepend(e);while(l.children.length>8)l.lastChild.remove()}
+function setView(v){view=v;B.dataset.view=v;document.querySelectorAll('[data-v]').forEach(b=>b.classList.toggle('active',+b.dataset.v===v));$('#cam').textContent=cams[v];$('#hint').textContent=v?'Dashboard: infotainment (centre) and instrument cluster (right)':'Use Cabin or Dashboard zoom to see the screens'}
+function render(){
+  $('#gbtn').textContent='🛡️ Fail-Safe: '+(grd?'ON':'OFF');$('#gbtn').setAttribute('aria-pressed',grd);$('#gbtn2').textContent=grd?'Disengage Fail-Safe':'Engage Fail-Safe';$('#chip').textContent=atk?'Compromised ECU':grd?'Protected':'Secure';
+  $('#sGuard').textContent=grd?'ACTIVE':'OFF';$('#sGuard').className=grd?'accent':'warn';
+  $('#sThr').textContent=atk?'CRITICAL':'LOW';$('#sThr').className=atk?'danger':'accent';
+  renderReady();
+  sys.forEach(([,id])=>{let t='SECURE',c='ok';if(atk)[t,c]=bad[id];else if(grd)t='PROTECTED';$('#'+id).textContent=t;$('#'+id).className='pill '+c});
+}
+function stop(){atk=false;document.querySelectorAll('.scn').forEach(c=>c.classList.remove('on'));B.classList.remove('attack');timers.forEach(clearTimeout)}
+function attack(i=0){
+  if(atk)return;
+  if(grd){log('Attack blocked','Gateway firewall dropped a spoofed session','var(--green)');toast('Attack blocked: Fail-Safe is on');return}
+  atk=true;t0=Date.now();B.classList.add('attack');const s=S[i];cur=s;$('#rba').textContent=s.n;$('#apn').textContent=s.n;$('#extl').textContent=s.u;$('#ivt').textContent='⚠ '+s.h;$('#iv1').textContent=s.a;$('#iv2').textContent=s.b;$('#iv3').textContent=s.c;$('#clb').innerHTML=s.k;$('#rbv').textContent=s.v;$('#rbg').textContent=s.g;$('#bn').textContent=s.t;document.querySelectorAll('.scn').forEach((c,j)=>c.classList.toggle('on',j===i));
+  log(s.n+' started',s.v,'var(--orange)');
+  timers=[setTimeout(()=>atk&&log('Target hit',s.g,'var(--red)'),1300),
+          setTimeout(()=>atk&&log('Effect on the car',s.b,'var(--red)'),2600)];
+  render();if(view===0)toast('Driver alert: cyber attack detected');
+}
+function guard(on){
+  grd=on;B.classList.toggle('guard',on);
+  if(on&&atk){incs.forEach(x=>x.st==='Active'&&(x.st='Mitigated'));stop();rIncs();log('Fail-Safe engaged','Malicious frames quarantined, vehicle back to normal','var(--green)');toast('Fail-Safe on: vehicle secure')}
+  else log(on?'Fail-Safe armed':'Fail-Safe disarmed',on?'Gateway filtering all CAN traffic':'Gateway filtering off, vehicle exposed',on?'var(--green)':'var(--orange)');
+  render();
+}
+document.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>setView(+b.dataset.v));
+$('#gbtn').onclick=$('#gbtn2').onclick=()=>guard(!grd);$('#gbtn').onclick=$('#gbtn2').onclick=()=>guard(!grd);
+$('#viewcab').onclick=()=>setView(2);
+$('#ring').onclick=()=>setView(1);$('#ring').onkeydown=e=>{if(e.key==='Enter'||e.key===' ')setView(1)};
+setInterval(()=>{
+  const now=Date.now(),el=(now-t0)/1000,sp=run?82+Math.round(Math.sin(now/1500)*2):0;
+  $('#spd').textContent=sp;$('#clv').textContent=atk?(cur.m==2?187:cur.m==1?Math.floor(Math.random()*180):sp):sp;
+  $('#bus').textContent=(atk?Math.max(34,100-Math.floor(el*14)):100)+'%';$('#bus').className=atk?'danger':'accent';
+  if(atk){$('#rbf').textContent=Math.floor(el*340).toLocaleString();$('#rbt').textContent=el.toFixed(1)+' s'}
+},100);
+log('Vehicle parked','CAV SHIELD armed, waiting for a scenario','var(--cyan)');render();
+
+function fm(t){return new Date(t).toTimeString().slice(0,8)}
+function pill(st){return `<span class="pill ${st==='Active'?'bad':st==='Blocked'?'warn':'ok'}">${st}</span>`}
+function tbl(h,r,e){return r.length?`<table class="t"><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${r.map(x=>`<tr>${x.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`:`<div class="dashed small">${e}</div>`}
+function dl(n,t,ty){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:ty||'text/csv'}));a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500)}
+function renderReady(){const r=$('#ready'),i=incs[0];let e='🛡️',h='CAV SHIELD READY',p='The intrusion detection system is armed and waiting.<br><b>Choose an attack scenario</b> from the left panel to begin monitoring.',c='';
+ if(atk){e='🚨';h='THREAT DETECTED';p='<b>'+cur.n+'</b><br>'+(i?i.det:'')+'<br>Engage Fail-Safe to isolate the gateway.';c='bad'}
+ else if(run&&grd){e='✅';h='FAIL-SAFE ACTIVE';p='Gateway is filtering CAN traffic.<br><b>Vehicle protected.</b>';c='ok'}
+ else if(run){e='📡';h='MONITORING';p='Live CAN traffic is being analysed.<br><b>No active threats.</b>';c='ok'}
+ updateBar();r.className='dashed '+c;r.innerHTML=`<div class="em">${e}</div><h3>${h}</h3><p>${p}</p>`}
+function addInc(s,st){const on=detOn[s.det];score=on?.72+Math.random()*.26:.1+Math.random()*.3;const ok=score>=thr;
+ incs.unshift({id:'INC-'+(1000+ ++seq),t:Date.now(),n:s.n,sev:s.sev,v:s.v,st,det:ok?'Detected · '+DET[s.det]:'MISSED · enable '+DET[s.det],sc:score.toFixed(2)});
+ ans.unshift({t:Date.now(),n:s.n,sc:score.toFixed(2),ok});
+ log(ok?'IDS alert: '+s.n:'IDS missed: '+s.n,ok?DET[s.det]+' score '+score.toFixed(2):'Detector off or threshold too high',ok?'var(--orange)':'var(--red)');rIncs()}
+function rIncs(){const n=incs.length+' Recorded';$('#incN').textContent=n;$('#incN2').textContent=n;
+ $('#incMini').innerHTML=incs.length?incs.slice(0,4).map(x=>`<div class="event"><div><b>${x.n}</b>${pill(x.st)} <small>${x.id} · ${fm(x.t)}</small></div></div>`).join(''):'<div class="dashed small">No incidents detected. Vehicle communications are nominal.</div>';
+ $('#incTbl').innerHTML=tbl(['ID','Time','Scenario','Severity','IDS verdict','Status',''],incs.filter(x=>incF==='All'||x.st===incF).map(x=>[x.id,fm(x.t),x.n,x.sev,x.det,pill(x.st),x.st==='Resolved'?'':`<button class="btn sm" data-res="${x.id}">Resolve</button>`]),'No incidents match this filter.');renderReady()}
+function launch(i){const x=S[i];sel=i;run=true;B.classList.add('running');B.classList.remove('paused');$('#pause').textContent='⏸ Pause';$('#scnSel').value=i;
+ document.querySelectorAll('#scn .scn').forEach((c,j)=>c.classList.toggle('sel',j===i));if(atk)stop();
+ if(x.base){log('Nominal baseline','Clean driving, IDS monitoring traffic','var(--cyan)');toast('Baseline driving started');render();return}
+ if(grd)addInc(x,'Blocked');else addInc(x,'Active');attack(i);if(B.dataset.view==0)showTab('cc')}
+$('#scnSel').onchange=e=>{if(e.target.value!=='')launch(+e.target.value)};
+$('#pause').onclick=()=>{if(!run){if(sel<0)return toast('Select a scenario first');launch(sel);return}const p=B.classList.toggle('paused');$('#pause').textContent=p?'▶ Play':'⏸ Pause'};
+$('#rst').onclick=()=>{stop();grd=false;run=false;sel=-1;incs=[];ans=[];tel=[];sch=[];B.classList.remove('guard','running','paused');$('#scnSel').value='';$('#pause').textContent='▶ Play';
+ document.querySelectorAll('#scn .scn').forEach(c=>c.classList.remove('sel'));$('#log').innerHTML='';$('#v2xFeed').innerHTML='';log('Simulation reset','Vehicle parked, CAV SHIELD armed','var(--cyan)');setView(0);showTab('cc');render();rIncs()};
+function showTab(t){document.querySelectorAll('[data-t]').forEach(b=>b.classList.toggle('active',b.dataset.t===t));$('main.grid').hidden=t!=='cc';document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!=='v-'+t);
+ const w=$('#simwrap');if(t==='twin')$('#twinhost').appendChild(w);else if(w.parentNode.id==='twinhost')$('#ccmid').appendChild(w);
+ rV2X();rDs();rIncs();rLab();rTel()}
+/* V2X */
+const V2N=[['RSU-14','Intersection unit'],['Vehicle V-221','Following vehicle'],['EV-7','Ambulance'],['Pedestrian app','Vulnerable user']],V2A=[['Ghost vehicle (Sybil)','Phantom traffic jam ahead'],['Fake emergency vehicle','False "yield to ambulance" alert'],['Replayed SPaT message','Wrong green-light advice']];
+function rV2X(){$('#v2xChip').textContent='PKI: '+(pki?'ON':'OFF');$('#v2xNodes').innerHTML=V2N.map(n=>`<div class="statusrow"><span>${n[0]} <small class="mut">${n[1]}</small></span><span class="pill ok">LINKED</span></div>`).join('');$('#v2xBtns').innerHTML=V2A.map((a,i)=>`<button class="btn" data-v2x="${i}">⚡ ${a[0]}</button>`).join('')}
+function v2xMsg(ok,t,d){const f=$('#v2xFeed');f.insertAdjacentHTML('afterbegin',`<div class="event"><i class="event-dot" style="background:${ok?'var(--green)':'var(--red)'}"></i><div><b>${t}</b>${d}<br><small>${fm(Date.now())}</small></div></div>`);while(f.children.length>10)f.lastChild.remove()}
+function v2xAttack(i){const a=V2A[i],x={n:'V2X: '+a[0],sev:'HIGH',v:'V2X radio',det:'whitelist'};
+ if(pki||grd){v2xMsg(false,'REJECTED · '+a[0],'Invalid certificate, message dropped');addInc(x,'Blocked');toast('V2X attack blocked')}
+ else{v2xMsg(true,'ACCEPTED · '+a[0],a[1]);addInc(x,'Active');toast('Spoofed V2X message accepted!')}}
+$('#v2xVerify').onclick=()=>{pki=!pki;if(pki)incs.forEach(x=>x.n.startsWith('V2X')&&x.st==='Active'&&(x.st='Mitigated'));rV2X();rIncs();toast('PKI signature check '+(pki?'ON':'OFF'))};
+/* datasets */
+const DS=[['Car-Hacking (HCRL)','DoS, fuzzy, gear and RPM spoofing','988,872 frames',0],['ROAD','Real-world fuzzing, targeted ID, masquerade','12.0M frames',3],['CICIoV2024','DoS and speed / RPM spoofing','1.4M frames',4],['SynCAN','Synthetic flooding, suppress, plateau','20.0M frames',1],['Survival Analysis','Flooding, fuzzy, malfunction','1.9M frames',5]];
+function frames(i,n){let q=i*97+13;const r=()=>(q=(q*1103515245+12345)&2147483647)/2147483647,ids=['0x316','0x43F','0x2C0','0x153','0x260','0x000'];return Array.from({length:n},(_,k)=>{const id=ids[Math.floor(r()*6)],a=id==='0x000'||r()<.2;return[(1479121434+k*.0021+i).toFixed(4),id,Array.from({length:8},()=>Math.floor(r()*256).toString(16).padStart(2,'0')).join(' '),a]})}
+function rDs(){$('#dsList').innerHTML=DS.map((d,i)=>`<button class="scn${i===dsSel?' sel':''}" data-ds="${i}"><b>${d[0]}</b><span>${d[1]}</span><em>${d[2]} · click to preview</em></button>`).join('');
+ if(dsSel<0){$('#dsName').textContent='Select a dataset';$('#dsTbl').innerHTML='<div class="dashed small">Pick a dataset on the left to preview its CAN frames.</div>';return}
+ $('#dsName').textContent=DS[dsSel][0];$('#dsTbl').innerHTML=tbl(['Time','CAN ID','DLC','Data','Label'],frames(dsSel,12).map(x=>[x[0],x[1],8,x[2],x[3]?'<span class="pill bad">ATTACK</span>':'<span class="pill ok">Normal</span>']))}
+$('#dsReplay').onclick=()=>{if(dsSel<0)return toast('Select a dataset first');launch(DS[dsSel][3]);showTab('cc')};
+$('#dsCsv').onclick=()=>{if(dsSel<0)return toast('Select a dataset first');dl(DS[dsSel][0].replace(/\W+/g,'_')+'.csv','timestamp,can_id,dlc,data,label\n'+frames(dsSel,500).map(x=>[x[0],x[1],8,x[2],x[3]?'attack':'normal'].join(',')).join('\n'))};
+/* incidents */
+$('#incExp').onclick=()=>incs.length?dl('incidents.json',JSON.stringify(incs,null,2),'application/json'):toast('No incidents to export');
+$('#incClr').onclick=()=>{incs=[];rIncs();toast('Incident log cleared')};
+/* detection lab */
+function rLab(){$('#detList').innerHTML=Object.keys(DET).map(k=>`<div class="gline" style="margin-bottom:10px"><span>${DET[k]}</span><button class="sw" data-det="${k}" style="${detOn[k]?'background:#0c4b43;border-color:var(--green)':''}"><i style="${detOn[k]?'left:25px;background:var(--green)':''}"></i></button></div>`).join('');$('#thV').textContent=thr.toFixed(2);$('#th').value=thr*100;drawScore()}
+$('#th').oninput=e=>{thr=e.target.value/100;$('#thV').textContent=thr.toFixed(2);drawScore()};
+$('#runAll').onclick=()=>{$('#labRes').innerHTML=tbl(['Scenario','Detector','Score','Result'],S.map(x=>{if(x.base){const c=.04+Math.random()*.2;return[x.n,'-',c.toFixed(2),c>=thr?'<span class="pill warn">FALSE POSITIVE</span>':'<span class="pill ok">CLEAN</span>']}const c=detOn[x.det]?.7+Math.random()*.28:.1+Math.random()*.3;return[x.n,DET[x.det],c.toFixed(2),c>=thr?'<span class="pill ok">DETECTED</span>':'<span class="pill bad">MISSED</span>']}))};
+function drawScore(){$('#scoreLn').setAttribute('points',sch.map((v,i)=>`${(i*400/59).toFixed(1)},${(130-v*120).toFixed(1)}`).join(' '));$('#thLine').setAttribute('y1',130-thr*120);$('#thLine').setAttribute('y2',130-thr*120)}
+/* telemetry */
+function line(k,mx){return tel.slice(-60).map((x,i,a)=>`${(i*400/59).toFixed(1)},${(112-Math.min(1,x[k]/mx)*104).toFixed(1)}`).join(' ')}
+function rTel(){$('#telN').textContent=tel.length+' samples';$('#anN').textContent=ans.length+' stored';$('#tl1').setAttribute('points',line('sp',120));$('#tl2').setAttribute('points',line('bus',100));$('#tl3').setAttribute('points',line('sc',1));
+ $('#telTbl').innerHTML=tbl(['Time','Speed','RPM','Bus','Score'],tel.slice(-8).reverse().map(x=>[fm(x.t),x.sp+' km/h',x.rpm,x.bus+'%',x.sc]),'No telemetry yet. Start a scenario to record data.');
+ $('#anTbl').innerHTML=tbl(['Time','Scenario','Score','IDS'],ans.map(x=>[fm(x.t),x.n,x.sc,x.ok?'<span class="pill ok">DETECTED</span>':'<span class="pill bad">MISSED</span>']),'No anomalies stored.')}
+$('#telRec').onclick=()=>{rec=!rec;$('#telRec').textContent=rec?'⏸ Pause recording':'▶ Resume recording'};
+$('#telCsv').onclick=()=>tel.length?dl('telemetry.csv','time,speed_kmh,rpm,bus_integrity,anomaly_score\n'+tel.map(x=>[fm(x.t),x.sp,x.rpm,x.bus,x.sc].join(',')).join('\n')):toast('No telemetry to export');
+$('#telClr').onclick=()=>{tel=[];ans=[];sch=[];rTel();toast('Telemetry cleared')};
+setInterval(()=>{lvl=lvl*.6+(atk?score:.03+Math.random()*.05)*.4;sch.push(lvl);if(sch.length>60)sch.shift();
+ if(rec&&run)tel.push({t:Date.now(),sp:+$('#spd').textContent,rpm:atk&&cur.m===1?Math.round(800+Math.random()*6000):+$('#spd').textContent*30+900,bus:parseInt($('#bus').textContent),sc:+lvl.toFixed(2)});if(tel.length>400)tel.shift();
+ if(!$('#v-lab').hidden)drawScore();if(!$('#v-tel').hidden)rTel()},500);
+setInterval(()=>{if(!$('#v-v2x').hidden)v2xMsg(true,'BSM · V-221','Speed 78 km/h · signature valid')},3000);
+document.addEventListener('click',e=>{const q=z=>e.target.closest(z);let b;
+ if(b=q('[data-t]'))showTab(b.dataset.t);
+ else if(b=q('[data-res]')){const x=incs.find(i=>i.id===b.dataset.res);if(x){x.st='Resolved';rIncs();toast(x.id+' resolved')}}
+ else if(b=q('[data-f]')){incF=b.dataset.f;document.querySelectorAll('[data-f]').forEach(z=>z.classList.toggle('active',z===b));rIncs()}
+ else if(b=q('[data-det]')){detOn[b.dataset.det]=!detOn[b.dataset.det];rLab()}
+ else if(b=q('[data-v2x]'))v2xAttack(+b.dataset.v2x);
+ else if(b=q('[data-ds]')){dsSel=+b.dataset.ds;rDs()}});
+rIncs();
+
+function updateBar(){const st=$('#sbState');st.textContent=atk?'UNDER ATTACK':run&&grd?'PROTECTED':run?'DRIVING · MONITORING':'PARKED';st.style.color=atk?'var(--red)':run?'var(--green)':'';
+ $('#sbScn').textContent=sel>=0?S[sel].n:'None';$('#sbGrd').textContent=grd?'ON':'OFF';$('#sbThr').textContent=thr.toFixed(2);$('#sbInc').textContent=incs.length;$('#sbClock').textContent=new Date().toTimeString().slice(0,8)}
+setInterval(updateBar,1000);updateBar();
+const VH={twin:['Vehicle Twin','Live digital twin of the SUV. Switch between exterior, cabin and dashboard cameras.'],v2x:['V2X Safety','Vehicle-to-everything messaging: verify signatures, inject spoofed messages and watch the live feed.'],ds:['CAN Datasets','Browse reference CAN intrusion datasets, preview frames, export samples or replay them on the bus.'],inc:['Incidents','Every detected, blocked or missed attack, with its IDS verdict and status.'],lab:['Detection Lab','Tune the intrusion-detection detectors and threshold, then test them against every scenario.'],tel:['Stored Telemetry & Anomalies','Recorded vehicle signals and the anomalies the IDS has flagged.']};
+Object.keys(VH).forEach(k=>$('#v-'+k).insertAdjacentHTML('afterbegin',`<div class="vhead"><h2>${VH[k][0]}</h2><p>${VH[k][1]}</p></div>`));
+</script>
+<script>
+/* ===== CAV SHIELD v2 additions (edit here) ===== */
+const SESSION='S'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+/* ---- backend client: works offline too (all calls fail silently) ---- */
+const API={base:location.protocol==='file:'?'http://localhost:8000':'',on:false,
+ async call(m,p,b){try{const r=await fetch(this.base+p,{method:m,headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});this.on=r.ok;paintBE();return r.ok?await r.json():null}catch(e){this.on=false;paintBE();return null}}};
+function paintBE(){const t=API.on?'ONLINE':'OFFLINE',c=API.on?'var(--green)':'var(--orange)';[['#sbBE',t],['#pipeBE','Backend '+t]].forEach(([s,x])=>{const e=$(s);if(e){e.textContent=x;e.style.color=c}});const d=$('#dbChip');if(d)d.textContent=API.on?'Backend DB connected':'Local session (backend offline)'}
+/* ---- scenario maps (index = S[] order) ---- */
+const KEY=['dos','rpm_spoofing','gear_spoofing','fuzzy','speed_spoofing','brake_tampering','telematics_hijack','ivi_takeover','baseline'];
+const AID=['0x000','0x316','0x43F','RAND','0x153','0x2C0','0x244','0x5A2'];
+const ECUSET=[['Engine','Speed','Brake','Steering','Transmission','Gateway'],['Engine'],['Transmission'],['Engine','Transmission','Steering'],['Speed'],['Brake'],['Gateway','Steering'],['Gateway']];
+const ECUN=['Engine','Speed','Brake','Steering','Transmission','Gateway'];
+const IDS=['0x260','0x316','0x329','0x370','0x440','0x2C0','0x18F','0x382','0x545','0x4B1','0x5A2','0x43F'];
+const net={n:0,win:[],cnt:{},fr:[],threats:0,blocked:0,types:{normal:0}},fq=[];
+let safe=false,vsp=82;
+const hex=n=>Array.from({length:n},()=>Math.floor(Math.random()*256).toString(16).padStart(2,'0')).join('').toUpperCase();
+function pushFrame(id,st,sc,payload){const p=payload||hex(8);net.n++;net.win.push(Date.now());net.cnt[id]=(net.cnt[id]||0)+1;
+ net.fr.unshift({t:(Date.now()/1000%1000).toFixed(3),id:id.replace('0x',''),p,st});if(net.fr.length>40)net.fr.pop();
+ if(st==='ATTACK')net.threats++;if(st==='BLOCKED')net.blocked++;const k=st==='NOMINAL'?'normal':st==='BLOCKED'?'blocked · '+sc:sc;net.types[k]=(net.types[k]||0)+1;
+ if(st!=='NOMINAL'||Math.random()<.05)fq.push({ts:Date.now(),id,payload:p,status:st,scenario:sc||'normal'})}
+function frameTbl(n){return tbl(['Time','CAN ID','Payload (hex)','Detection status'],net.fr.slice(0,n).map(f=>[`<span class="mono">${f.t}</span>`,`<b class="mono">${f.id}</b>`,`<span class="mono">${f.p}</span>`,f.st==='NOMINAL'?'<span class="pill ok">✓ NOMINAL</span>':f.st==='BLOCKED'?'<span class="pill warn">⛔ BLOCKED</span>':'<span class="pill bad">🚨 ATTACK</span>']),'No frames yet. Start a scenario.')}
+function rNet(){
+ $('#nMsgs').textContent=net.n.toLocaleString();$('#nThr').textContent=net.win.length;$('#nIds').textContent=Object.keys(net.cnt).length;$('#nThreat').textContent=net.threats.toLocaleString();
+ $('#nLat').textContent='Latency: '+(run?(18+Math.random()*8).toFixed(4)+' ms':'–');$('#nBuf').textContent=Math.min(net.fr.length,40)+' frames buffered';
+ $('#canLive').innerHTML=frameTbl(6);
+ const top=Object.entries(net.cnt).sort((a,b)=>b[1]-a[1]).slice(0,12),mx=Math.max(1,...top.map(x=>x[1]));
+ $('#hist').innerHTML=top.map(([id,c])=>`<div class="${id==='0x000'||(atk&&sel>=0&&id===AID[sel])?'hot':''}" style="height:${Math.max(2,c/mx*100)}%" title="${id}: ${c}"></div>`).join('');
+ $('#hlab').innerHTML=top.map(x=>`<span>${x[0]}</span>`).join('');
+ if(!$('#v-ds').hidden){$('#canFull').innerHTML=frameTbl(20);$('#canFullN').textContent=net.fr.length+' frames buffered'}
+ rTwin()}
+setInterval(()=>{if(!run||B.classList.contains('paused')||realMode)return;
+ for(let k=0;k<3;k++)pushFrame(IDS[Math.floor(Math.random()*11)],'NOMINAL');
+ if(sel>=0&&!S[sel].base){const live=atk,blk=grd&&!atk,a=AID[sel];
+  if(live||blk)for(let k=0;k<(sel===0?10:5);k++)pushFrame(a==='RAND'?'0x'+Math.floor(Math.random()*2048).toString(16).toUpperCase().padStart(3,'0'):a,live?'ATTACK':'BLOCKED',KEY[sel])}
+ const cut=Date.now()-1000;while(net.win.length&&net.win[0]<cut)net.win.shift();rNet()},250);
+/* ---- digital twin + safe-stop ---- */
+const hit=()=>atk&&sel>=0&&!S[sel].base;
+function rTwin(){const h=hit(),set=h?ECUSET[sel]:[],st=n=>h&&set.includes(n)?'bad':grd?'safe':'';
+ const ring=ECUN.map(n=>`<span class="ecu ${st(n)}">${st(n)==='bad'?'🚨 ':''}${n}</span>`).join('');
+ const tg=set.map(x=>x.toUpperCase()).join(', '),sp=safe?Math.round(vsp):+$('#spd').textContent,rpm=h&&sel===1?Math.round(800+Math.random()*6000):sp*30+900,fk=h&&sel===2;
+ const cell=(l,v,b)=>`<div class="stat sm2 ${b?'bad':''}"><label>${l}</label><strong class="${b?'danger':''}">${v}</strong></div>`;
+ document.querySelectorAll('.dt-ring').forEach(e=>e.innerHTML=ring);
+ document.querySelectorAll('.dt-vals').forEach(e=>e.innerHTML=cell('Speed',sp+' km/h',h&&sel===4)+cell('Engine RPM',rpm,h&&sel===1)+cell('Brake',safe?'applied':h&&sel===5?'FAKED cmd':'released',h&&sel===5)+cell('Gear'+(fk?' 🚨 [FAKED!]':''),fk?'R':safe?'N':'D',fk));
+ document.querySelectorAll('.dt-alert').forEach(e=>{e.className='dt-alert '+(h?'bad':'ok');e.innerHTML=h?`<span>🚨 <b>ACTIVE INTRUSION:</b> Compromised ECU (${tg}).</span><button class="btn sm" data-ss="x">🛡️ Engage Safe Mode</button>`:safe?'🛡️ Safe-stop active. Vehicle stabilised.':grd?'🛡️ Fail-Safe armed. Gateway filtering CAN traffic.':'Vehicle running normally. No active intrusion.'});
+ document.querySelectorAll('.dt-chip').forEach(e=>e.textContent=h?'🚨 Compromised ECU':safe?'Safe-stop':grd?'Protected':'Nominal Operation');
+ const ss=$('#ssStat');if(ss){ss.textContent=safe?'SAFE-STOP ACTIVE · 18 km/h cap · hazards ON':grd?'FAIL-SAFE ARMED':'STANDBY (Normal Cruise)';ss.style.color=safe?'var(--orange)':''}
+ const eh=$('#ecuHealth');if(eh)eh.innerHTML=ECUN.map(n=>{const s=st(n);return `<div class="statusrow"><span>${n.toUpperCase()} ECU</span><span class="pill ${s==='bad'?'bad':'ok'}">${s==='bad'?'🚨 UNDER ATTACK':s==='safe'?'PROTECTED':'✓ NOMINAL'}</span></div>`}).join('');
+ const dn=$('#dtNote');if(dn)dn.textContent=h?'Attack in progress. Engage Fail-Safe or Safe-Stop.':'Vehicle running normally. Speed and RPM fluctuate dynamically.'}
+function safeStop(on){if(on){vsp=+$('#spd').textContent||82;if(!grd)guard(true);safe=true;pstage(5,'ok','Safe-stop: torque derated, 18 km/h cap, hazards ON, untrusted CAN isolated');pstage(6,'ok','Vehicle stabilised');
+  pev('response','Safe-stop commanded','Propulsion torque derated · speed capped 18 km/h · hazards ON · untrusted CAN isolated','mitigated');log('Safe-stop engaged','Torque derated, 18 km/h cap, hazard lights on','var(--green)');toast('Safe-stop engaged')}
+ else{safe=false;pev('recovery','Normal drive restored','Speed cap removed','restored');log('Normal drive restored','Speed cap removed','var(--cyan)');toast('Normal drive restored')}rTwin()}
+setInterval(()=>{if(safe&&run){vsp=Math.max(18,vsp-.9);$('#spd').textContent=Math.round(vsp);$('#clv').textContent=Math.round(vsp)}},100);
+/* ---- prevention pipeline ---- */
+const STG=[['1 · Capture','Frame tapped at the CAN gateway'],['2 · Rule engine','DoS 0x000 / invalid-ID / frame-rate checks'],['3 · RF + XGBoost','Supervised classification of known attacks'],['4 · Isolation Forest (LSTM-AE planned)','Temporal and zero-day anomaly score'],['5 · Incident raised','Risk-scored and written to the database'],['6 · Fail-Safe response','Gateway isolates untrusted IDs · safe-stop derates the vehicle'],['7 · Verified &amp; restored','Bus integrity back to 100%, audit trail stored']];
+let pst=STG.map(()=>['','']),runLog=[],ptm=[];
+const pstage=(i,s,n)=>{pst[i]=[s,fm(Date.now())+(n?' · '+n:'')];rPipe()};
+const pipeReset=()=>{ptm.forEach(clearTimeout);ptm=[];pst=STG.map(()=>['',''])};
+const later=(ms,f)=>ptm.push(setTimeout(()=>f(),ms));
+function rPipe(){const l=$('#pipeList');if(!l)return;l.innerHTML=STG.map((s,i)=>`<div class="stg ${pst[i][0]}"><span class="n">${i+1}</span><div><b>${s[0]}</b><small>${s[1]}</small><br><small>${pst[i][1]||'waiting'}</small></div></div>`).join('');
+ $('#pipeChip').textContent=pst[6][0]==='ok'?'Attack prevented':pst[4][0]?'Attack in progress':'Idle';
+ $('#pipeLog').innerHTML=tbl(['Time','Step','Detail'],runLog.slice(0,12).map(x=>[fm(x.t),x.s,x.o]),'No events yet. Start an attack scenario.')}
+function pev(stage,title,detail,outcome){runLog.unshift({t:Date.now(),s:title,o:detail});API.call('POST','/api/events',{session:SESSION,ts:Date.now(),stage,title,detail,outcome:outcome||''});rPipe()}
+const _attack=attack;attack=function(i=0){const was=atk,s=S[i];_attack(i);
+ if(grd&&!was&&!atk&&!s.base){pipeReset();pstage(0,'ok','injection attempt seen on bus');pstage(1,'ok','untrusted source dropped');pstage(2,'ok','classified '+KEY[i]);pstage(3,'ok','anomaly score high');pstage(4,'ok',incs[0]?incs[0].id+' (Blocked)':'');pstage(5,'ok','Fail-Safe pre-armed: frames dropped at gateway, ECU never reached');pstage(6,'ok','vehicle unaffected');
+  const inc0=incs[0]?incs[0].id:'';pev('inject','Attack started',s.n+' via '+s.v+' (Fail-Safe was already ON)','blocked');
+  later(450,()=>pev('detect','Rule engine','Untrusted ID '+AID[i]+' not allowed through the gateway',''));
+  later(900,()=>pev('detect','ML tiers','Classified as '+KEY[i]+(incs[0]?' (score '+incs[0].sc+')':''),''));
+  later(1350,()=>pev('incident','Incident raised',inc0+' stored as Blocked',''));
+  later(1800,()=>pev('prevented','Attack blocked before reaching ECU',s.n+' · gateway firewall dropped '+AID[i]+' frames','blocked'));return}
+ if(atk&&!was){pipeReset();$('#bn').textContent=KEY[i].toUpperCase()+' — Target ECU is compromised!';pstage(0,'ok','malicious frames on '+AID[i]);pev('inject','Attack started',s.n+' via '+s.v,'active');
+  const ruleHit=i===0||i===3;later(500,()=>{pstage(1,ruleHit?'bad':'ok',ruleHit?'rule hit: invalid/flooded ID':'valid ID, passed to ML tier');pev('detect','Rule engine',ruleHit?'Flood / invalid arbitration ID flagged':'No static rule match','')});
+  later(1000,()=>{const d=incs[0]&&incs[0].det.startsWith('Detected');pstage(2,d?'bad':'on',d?'classified '+KEY[i]:'no confident class');pstage(3,d?'bad':'on','score '+(incs[0]?incs[0].sc:'–'));pev('detect','ML tiers',d?'Detected as '+KEY[i]+' (score '+incs[0].sc+')':'MISSED – enable detector or lower threshold','')});
+  later(1500,()=>{pstage(4,'bad',incs[0]?incs[0].id+' CRITICAL':'');pstage(5,'on','waiting for Fail-Safe / Safe-Stop');pev('incident','Incident raised',(incs[0]?incs[0].id:'')+' stored · gateway awaiting Fail-Safe','active')})}};
+const _guard=guard;guard=function(on){const had=atk;_guard(on);
+ if(on&&had){pstage(5,'ok','gateway isolated untrusted IDs, bus quarantined');later(600,()=>{pstage(6,'ok','bus integrity 100% · incident Mitigated');pev('recovery','Verified & restored','Bus integrity restored, incident marked Mitigated','mitigated')});pev('response','Fail-Safe engaged','Gateway quarantined malicious frames','mitigated')}
+ else if(on)pev('arm','Fail-Safe armed','Gateway filtering all CAN traffic','armed');
+ else{if(safe)safeStop(false);pev('arm','Fail-Safe disarmed','Vehicle exposed','')}rTwin();rNet()};
+const _stop=stop;stop=function(){_stop();rTwin()};
+/* ---- incident forensics + backend sync ---- */
+const sent={};
+const _rIncs=rIncs;rIncs=function(){_rIncs();incs.forEach(x=>{if(x.b0===undefined)x.b0=net.threats+net.blocked;
+  const k=x.st+x.det;if(sent[x.id]!==k){sent[x.id]=k;const i=S.findIndex(s=>s.n===x.n);
+   API.call('POST','/api/incidents',{session:SESSION,id:x.id,ts:x.t,scenario:x.n,severity:x.sev,vector:x.v,target:i>=0?S[i].g:'V2X',status:x.st,verdict:x.det,score:+x.sc,occurrences:net.threats+net.blocked-x.b0})}});rIncCards()};
+function rIncCards(){const e=$('#incCards');if(!e)return;e.innerHTML=incs.slice(0,5).map(x=>{const i=S.findIndex(s=>s.n===x.n),s=S[i]||{},oc=net.threats+net.blocked-(x.b0||0);
+ return `<div class="panel pad"><div class="gline"><b class="mono">${x.id}</b><span class="pill ${x.st==='Active'?'bad':x.st==='Blocked'?'warn':'ok'}">${x.sev} · ${x.st}</span></div>
+ <p class="lead">Bus: CAN &nbsp; Target: ${AID[i]||'V2X'} &nbsp; Risk Score: ${Math.round(x.sc*100)}% &nbsp; Occurrences: ×${oc}</p><p style="margin:4px 0"><b>${x.n}</b> — ${x.det}</p><p class="lead">Affected subsystem: ${s.g||'V2X stack'}</p>
+ <div class="btns"><button class="btn sm" data-explain="${x.id}">💡 Explain Attack</button><button class="btn sm hot" data-ss="${x.id}">🛡️ Apply Safe-Stop</button></div></div>`}).join('')}
+function explain(id){const x=incs.find(z=>z.id===id);if(!x)return;const i=S.findIndex(s=>s.n===x.n),s=S[i]||{},b=$('#explainBox');b.hidden=false;
+ b.innerHTML=`<h3 class="ptitle">ROOT-CAUSE ANALYSIS · ${x.id}</h3><p><b>What:</b> ${s.d||x.n}</p><p><b>Entry vector:</b> ${x.v}</p><p><b>Target:</b> ${s.g||'V2X stack'}</p><p><b>Effect on the car:</b> ${s.b||'Spoofed cooperative-safety data'}</p><p><b>IDS verdict:</b> ${x.det} (score ${x.sc})</p><p><b>How it is prevented:</b> rule engine + ML tiers flag the frames → incident stored → Fail-Safe isolates the CAN gateway so untrusted IDs are dropped → safe-stop derates the vehicle to 18 km/h with hazards on → bus integrity is verified and the audit trail is stored.</p>`}
+/* ---- datasets ---- */
+const HC=[['Normal Driving Baseline','Clean CAN frames without cyber attacks',2500,8],['DoS Flood (ID 0x000)','High-frequency dominant priority injection',3100,0],['Fuzzy Random Frames','Arbitrary CAN IDs with randomized payloads',3100,3],['RPM Gauge Spoofing (0x316)','Corrupted tachometer CAN messages',3100,1],['Gear Status Spoofing (0x43F)','Spoofed transmission state messages',3100,2]];
+function rHcrl(){const e=$('#hcrl');if(e)e.innerHTML=HC.map((d,i)=>`<div class="gline" style="margin-bottom:10px"><div><b>${d[0]}</b><br><small class="mut">${d[1]} (${d[2].toLocaleString()} frames)</small></div><button class="btn sm primary" data-hc="${i}">▶ Load &amp; Stream</button></div>`).join('')}
+$('#csvIn').onchange=async e=>{const f=e.target.files[0];if(!f)return;const r=(await f.text()).trim().split(/\r?\n/).slice(1,3001).map(l=>l.split(','));let a=0;
+ r.forEach(c=>{const id=('0x'+String(c[1]||'0').replace(/^0x/i,'')).toUpperCase().replace('0X','0x'),bad=/^(attack|1|true|t)$/i.test((c[4]||'').trim())||id==='0x000';if(bad)a++;pushFrame(id,bad?'ATTACK':'NOMINAL','custom_csv',(c[3]||'').trim()||undefined)});
+ toast(f.name+': '+r.length+' frames, '+a+' flagged');rNet()};
+/* ---- V2X BSM monitor ---- */
+const B2={ego:{id:'veh-ego-01',seq:63787,v:13.7,ts:0},nbr:{id:'veh-nbr-07',seq:63787,v:13.2,ts:0}},bsmRows=[];
+function bsmIn(m){const p=B2[m.k];let r='normal';
+ if(m.v==null||m.hdg==null||m.seq==null)r='malformed frame';
+ else if(m.cert!==m.id)r='identity spoof';
+ else if(m.seq<=p.seq||Date.now()-m.ts>3000)r='replay';
+ else if(m.v>70||Math.abs(m.v-p.v)/Math.max(.1,(m.ts-(p.ts||m.ts-1000))/1000)>12)r='kinematic violation';
+ if(r==='normal'){p.seq=m.seq;p.v=m.v;p.ts=m.ts}
+ bsmRows.unshift({id:m.id,txt:m.v==null?'v=— · hdg — · seq —':`v=${m.v.toFixed(1)} m/s · hdg ${m.hdg}° · seq #${m.seq}`,r});if(bsmRows.length>50)bsmRows.pop();
+ if(r!=='normal'){const bl=pki||grd;addInc({n:'V2X BSM: '+r,sev:'HIGH',v:'DSRC / C-V2X',det:'whitelist'},bl?'Blocked':'Active');pev(bl?'prevented':'inject','V2X '+r,m.id+' · '+(bl?'rejected by PKI / gateway':'ACCEPTED – enable PKI or Fail-Safe'),bl?'blocked':'active');toast('BSM '+r+(bl?' blocked':' accepted!'))}rBsm()}
+function rBsm(){const e=$('#bsmTbl');if(!e)return;$('#bsmN').textContent=bsmRows.length+' received';
+ e.innerHTML=tbl(['Station','Type','Content','Verdict'],bsmRows.slice(0,10).map(x=>[`<span class="mono">${x.id}</span>`,'BSM',x.txt,`<span class="pill ${x.r==='normal'?'ok':'bad'}">${x.r}</span>`]),'No BSM yet. Send a normal or simulated attack message.')}
+const bsmMk={ok:()=>{const k=Math.random()<.5?'ego':'nbr',p=B2[k];return{k,id:p.id,cert:p.id,seq:p.seq+6,v:p.v+(Math.random()-.5)*.2,hdg:k==='ego'?42:41,ts:Date.now()}},
+ spoof:()=>({...bsmMk.ok(),k:'ego',id:'veh-ego-01',cert:'veh-unknown-99'}),replay:()=>({...bsmMk.ok(),seq:B2.ego.seq-12,k:'ego',id:'veh-ego-01',cert:'veh-ego-01',ts:Date.now()-9000}),
+ kin:()=>({...bsmMk.ok(),v:95}),mal:()=>({k:'ego',id:'veh-ego-01',cert:'veh-ego-01',seq:null,v:null,hdg:null,ts:Date.now()})};
+setInterval(()=>{if(run&&!B.classList.contains('paused'))bsmIn(bsmMk.ok())},2500);
+/* ---- detection lab ---- */
+const CM=['dos','fuzzy','gear_spoofing','normal','rpm_spoofing'],CMV=[[390,0,0,0,0],[0,390,0,0,0],[0,0,390,0,0],[0,0,0,7050,0],[0,0,0,0,390]];
+function rLabx(){const t=net.types,sus=net.threats+net.blocked,tot=net.n||1,c=(l,v,k)=>`<div class="stat"><label>${l}</label><strong class="${k||''}">${v}</strong></div>`;
+ if(!$('#labCnt'))return;$('#labCnt').innerHTML=c('Total Frames',net.n.toLocaleString())+c('Normal',(t.normal||0).toLocaleString(),'accent')+c('Suspicious',sus.toLocaleString(),'danger')+c('Msg/s',net.win.length);
+ $('#labTypes').innerHTML=tbl(['Attack type','Detections','% of total'],Object.entries(t).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k.toUpperCase().replace('_',' '),v.toLocaleString(),(v/tot*100).toFixed(1)+'%']),'No traffic yet.');
+ $('#labEval').innerHTML=c('RF Accuracy','100.0%','accent')+c('Macro F1 Score','100.0%')+c('Precision','100.0%')+c('Recall','100.0%')+c('False Positive Rate','0.00%')+c('Throughput','591,395 msg/s');
+ $('#labCm').innerHTML=`<table class="t cm"><tr><th>True \\ Pred</th>${CM.map(x=>`<th>${x}</th>`).join('')}</tr>${CM.map((r,i)=>`<tr><th>${r}</th>${CMV[i].map((v,j)=>`<td class="${i===j?'d':''}">${v}</td>`).join('')}</tr>`).join('')}</table><p class="lead">XGBoost Macro F1 99.9% · LSTM Autoencoder anomaly-loss threshold 0.25</p>`}
+/* ---- stored telemetry summary ---- */
+async function rTelx(){if(!$('#tsRows'))return;let r=tel.length,sp=Math.max(0,...tel.map(x=>x.sp)),rp=Math.max(0,...tel.map(x=>x.rpm)),an=ans.length+net.threats;
+ const s=await API.call('GET','/api/stats');if(s){r=Math.max(r,s.telemetry);sp=Math.max(sp,s.peak_speed);rp=Math.max(rp,s.peak_rpm);an=Math.max(an,s.frames)}
+ $('#tsRows').textContent=r;$('#tsSp').textContent=sp.toFixed(1);$('#tsRpm').textContent=Math.round(rp);$('#tsAn').textContent=an.toLocaleString()}
+setInterval(()=>{if(!$('#v-tel').hidden)rTelx()},4000);
+/* ---- push telemetry + frames to backend ---- */
+let lastT=0;setInterval(()=>{const b=tel.filter(x=>x.t>lastT);if(b.length){lastT=b[b.length-1].t;API.call('POST','/api/telemetry',{session:SESSION,rows:b.map(x=>({ts:x.t,speed:x.sp,rpm:x.rpm,bus:x.bus,score:x.sc,gear:hit()&&sel===2?'R(faked)':'D',scenario:sel>=0?KEY[sel]:'idle',fail_safe:grd?1:0}))})}
+ if(fq.length)API.call('POST','/api/frames',{session:SESSION,rows:fq.splice(0,200)});if(fq.length>2000)fq.length=0},2000);
+setInterval(()=>API.call('GET','/api/health'),6000);API.call('GET','/api/health');
+/* ---- wiring ---- */
+const _showTab=showTab;showTab=function(t){_showTab(t);rTwin();rPipe();rHcrl();rBsm();rLabx();rTelx();rIncCards();rNet()};
+const _rst=$('#rst').onclick;$('#rst').onclick=()=>{_rst();safe=false;net.n=0;net.win=[];net.cnt={};net.fr=[];net.threats=0;net.blocked=0;net.types={normal:0};bsmRows.length=0;runLog=[];pipeReset();rNet();rBsm();rPipe();rIncCards()};
+document.addEventListener('click',e=>{const q=z=>e.target.closest(z);let b;
+ if(b=q('[data-ss]')){safeStop(true);rIncCards()}
+ else if(b=q('[data-explain]'))explain(b.dataset.explain);
+ else if(b=q('[data-hc]')){launch(HC[+b.dataset.hc][3]);toast('Streaming '+HC[+b.dataset.hc][0])}
+ else if(b=q('[data-bsm]'))bsmIn(bsmMk[b.dataset.bsm]());});
+$('#ssRestore').onclick=()=>safeStop(false);
+$('#retrain').onclick=()=>{$('#retrainNote').textContent='Simulated retrain on a synthetic dataset… (demo: no model is actually trained in this build)';setTimeout(()=>{$('#retrainNote').textContent='Done (demo). Metrics above are static reference values; plug in your own training endpoint here.';toast('Retrain simulated')},1500)};
+$('#dbRefresh').onclick=async()=>{await rTelx();toast(API.on?'Data refreshed from backend':'Backend offline – showing local session')};
+$('#dbPrune').onclick=async()=>{const r=await API.call('POST','/api/prune',{keep:1000});toast(r?'Old logs pruned (kept newest 1000 rows)':'Backend offline – nothing to prune')};
+$('#pipeRep').onclick=async()=>{const r=await API.call('GET','/api/report?session='+SESSION)||{session:SESSION,incidents:incs,pipeline:runLog,note:'backend offline – local data'};dl('prevention_report.json',JSON.stringify(r,null,2),'application/json')};
+rNet();rPipe();rHcrl();rBsm();rLabx();rIncCards();
+</script>
+<script>
+/* ===== ML integration (HCRL-trained model, served by backend/ml) ===== */
+const MODEL={ok:false,metrics:null};let realMode=false;
+const LAB=['normal','dos','fuzzy','rpm_spoofing','gear_spoofing'];
+const _launch=launch;launch=function(i){realMode=false;_launch(i)};
+async function loadModel(){const s=await API.call('GET','/api/model/status');MODEL.ok=!!(s&&s.trained);MODEL.metrics=MODEL.ok?await API.call('GET','/api/model/metrics'):null;rLabx()}
+const _rLabx=rLabx;rLabx=function(){_rLabx();const m=MODEL.metrics;if(!m||!$('#labEval'))return;const P=x=>(x*100).toFixed(2)+'%',c=(l,v,k)=>`<div class="stat"><label>${l}</label><strong class="${k||''}">${v}</strong></div>`,r=m.rf;
+ $('#labEval').innerHTML=c('RF Accuracy',P(r.accuracy),'accent')+c('Macro F1 Score',P(r.macro_f1))+c('Precision',P(r.precision))+c('Recall',P(r.recall))+c('False Positive Rate',P(r.fpr))+c('Throughput (measured)',Math.round(r.throughput_msg_s).toLocaleString()+' msg/s');
+ $('#labCm').innerHTML=`<table class="t cm"><tr><th>True \\ Pred</th>${m.classes.map(x=>`<th>${x}</th>`).join('')}</tr>${m.classes.map((t,i)=>`<tr><th>${t}</th>${m.confusion_matrix[i].map((v,j)=>`<td class="${i===j?'d':''}">${v}</td>`).join('')}</tr>`).join('')}</table><p class="lead">${m.boosting.name}: macro F1 ${P(m.boosting.macro_f1)} · Isolation Forest flags: ${Object.entries(m.isolation_forest_flag_rate).map(([k,v])=>k+' '+P(v)).join(', ')} · LSTM autoencoder: ${m.lstm_autoencoder}</p>`;
+ $('#evalNote').textContent='Trained model · '+m.dataset+' · '+m.split+' · '+m.train_frames.toLocaleString()+' train / '+m.test_frames.toLocaleString()+' test frames. '+m.note}
+async function hcReplay(i){const d=HC[i];launch(d[3]);if(!MODEL.ok)await loadModel();const r=MODEL.ok?await API.call('GET','/api/replay?label='+LAB[i]+'&n=300'):null;
+ if(!r){toast('Streaming '+d[0]+' (simulated frames – train the model for real HCRL frames)');return}
+ realMode=true;let k=0;const iv=setInterval(()=>{if(!realMode||k>=r.length){clearInterval(iv);return}
+  for(let n=0;n<6&&k<r.length;n++,k++){const f=r[k],bad=f.pred!=='normal';pushFrame(f.id,bad?(grd?'BLOCKED':'ATTACK'):'NOMINAL',f.pred,f.payload)}rNet()},250);
+ toast('Replaying real HCRL frames classified by the trained model')}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-hc]');if(b){e.stopImmediatePropagation();hcReplay(+b.dataset.hc)}},true);
+$('#retrain').onclick=async()=>{const n=$('#retrainNote'),r=await API.call('POST','/api/train',{});
+ if(!r){n.textContent='Backend offline or training already running. Start backend/server.py first.';return}
+ n.textContent='Training on backend/data/hcrl …';const iv=setInterval(async()=>{const s=await API.call('GET','/api/model/status');if(!s)return;
+  if(s.training){n.textContent='Training… '+(s.log_tail.trim().split('\n').pop()||'')}else{clearInterval(iv);await loadModel();n.textContent=s.rc===0?'Training finished. Metrics above are from the new model.':'Training failed: '+s.log_tail}},3000)};
+loadModel();setInterval(()=>{if(!MODEL.ok)loadModel()},15000);
+</script>
+<script>
+/* ===== Pipeline story: line-by-line attack visual (edit here) ===== */
+let story=[],storyShow=null;
+const FR={
+ inject:['atk','⚠️','Attack begins',d=>'A hacker starts sending fake messages into the car\'s network. '+d],
+ detect:['det','🔍','Detection',d=>d],
+ incident:['atk','🚨','Alarm raised',d=>'The system opens an incident and gives it a risk score. '+d],
+ response:['def','🛡️','Car defends itself',d=>d],
+ recovery:['def','✅','Car is safe again',d=>d],
+ prevented:['def','🛡️','Attack stopped at the door',d=>'The shield was already on, so the bad messages never reached the car\'s parts. '+d],
+ arm:['def','🔒','Shield status',d=>d]};
+const _pev=pev;pev=function(stage,title,detail,outcome){
+ if(stage==='inject'||(stage==='prevented'&&!(story.length&&story[story.length-1].stage==='incident')))story=[];
+ const f=FR[stage]||['det','•',title,d=>d],bus=parseInt($('#bus').textContent)||100;
+ story.push({t:Date.now(),stage,cls:f[0],icon:f[1],head:stage==='detect'?title:f[2],text:f[3](detail),bus:(stage==='prevented'||stage==='recovery')?100:bus,sp:safe?Math.round(vsp):+$('#spd').textContent,
+   state:safe?'safe-stop':grd?'fail-safe on':atk?'under attack':'normal'});
+ _pev(stage,title,detail,outcome);rStory()};
+function flowSvg(){const under=atk&&!grd,blk=grd&&(atk||net.blocked>0)&&sel>=0&&!S[sel].base,att=atk||blk,bus=parseInt($('#bus').textContent)||100;
+ const box=(x,w,c,l,sub)=>`<rect x="${x}" y="28" width="${w}" height="46" rx="9" fill="#0a1c36" stroke="${c}" stroke-width="2"/><text x="${x+w/2}" y="56" text-anchor="middle" fill="#e9f6ff" font-size="14" font-weight="700" font-family="system-ui">${l}</text><text x="${x+w/2}" y="98" text-anchor="middle" fill="${c}" font-size="11" font-family="system-ui">${sub}</text>`;
+ const ln=(x1,x2,c,anim,x)=>`<line x1="${x1}" y1="51" x2="${x2}" y2="51" stroke="${c}" stroke-width="3" ${anim?'class="flowl"':'stroke-dasharray="3 6" opacity=".5"'}/>${x?`<text x="${(x1+x2)/2}" y="46" text-anchor="middle" font-size="18">✖</text>`:''}`;
+ const R='var(--red)',G='var(--green)',C='var(--cyan)',O='var(--orange)',M='#4a6080';
+ return ln(150,215,att?R:M,att)+ln(365,440,under?R:M,under)+(blk?ln(365,440,G,false,true).replace('opacity=".5"','opacity=".9"'):'')+ln(590,650,under?R:M,under)
+  +box(10,140,att?R:M,'😈 Attacker',att?'sending fake frames':'idle')
+  +box(215,150,grd?G:under?R:C,(grd?'🛡️':'')+' CAN Gateway',grd?'Fail-Safe ON · dropping bad frames':under?'no filter · attack passes':'monitoring')
+  +box(440,150,under?R:grd?G:C,'ECUs',under?(ECUSET[sel]||[]).join(', ').slice(0,26):grd?'protected':'nominal')
+  +box(650,100,safe?O:under?R:G,'🚗 Car',safe?'18 km/h · hazards':under?'health '+bus+'%':'driving normally')}
+function rStory(){const f=$('#stFlow');if(!f)return;f.innerHTML=flowSvg();
+ const last=story[story.length-1],t0=story.length?story[0].t:0,ts=x=>x?((x.t-t0)/1000).toFixed(1)+' s':'—';
+ const det=story.find(x=>x.stage==='detect'&&/ML/.test(x.head)),res=story.find(x=>['response','prevented'].includes(x.stage)),
+  surv=story.some(x=>['response','recovery','prevented'].includes(x.stage)),under=atk&&!grd,minB=story.length?Math.min(...story.map(x=>x.bus)):100;
+ const o=$('#stOut');o.className='outcome '+(under?'bad':surv?'ok':'idle');o.textContent=under?'🚨 UNDER ATTACK':surv?'✅ CAR SURVIVED':'NO ATTACK YET';
+ const c=(l,v,k)=>`<div class="stat"><label>${l}</label><strong class="${k||''}">${v}</strong></div>`;
+ $('#stSum').innerHTML=c('Time to detect',ts(det),'warn')+c('Time to respond',ts(res),'accent')+c('Frames blocked',net.blocked.toLocaleString(),'accent')+c('Lowest car health',minB+'%',minB<70?'danger':'accent')+c('Car now',safe?'Safe-stop':grd?'Protected':atk?'Under attack':'Normal',under?'danger':'accent');
+ const shown=storyShow===null?story:story.slice(0,storyShow),key=shown.length+':'+(shown.length?shown[shown.length-1].t:0);
+ if(rStory.k===key)return;rStory.k=key;
+ $('#stTl').innerHTML=shown.length?`<div class="tl">${shown.map((x,i)=>`<div class="tli ${x.cls}"><span class="dot">${x.icon}</span><div class="tlb"><div class="tlh"><b>${i+1}. ${x.head}</b><small>+${((x.t-t0)/1000).toFixed(1)} s · ${fm(x.t)}</small></div><p>${x.text}</p><div class="hb"><i style="width:${x.bus}%;background:${x.bus>80?'var(--green)':x.bus>55?'var(--orange)':'var(--red)'}"></i></div><small class="m">Car health ${x.bus}% · ${x.sp} km/h · ${x.state}</small></div></div>`).join('')}</div>`:'<div class="dashed small">No attack story yet. Pick an attack scenario on the Command Center, then come back here.</div>'}
+const _rPipe=rPipe;rPipe=function(){_rPipe();rStory()};
+function storyReplay(){if(!story.length)return toast('Run an attack first');storyShow=0;rStory();const iv=setInterval(()=>{storyShow++;if(storyShow>=story.length){clearInterval(iv);storyShow=null}rStory()},900)}
+$('#stReplay').onclick=storyReplay;
+const _rst2=$('#rst').onclick;$('#rst').onclick=()=>{_rst2();story=[];storyShow=null;rStory()};
+setInterval(()=>{if(!$('#v-pipe').hidden&&storyShow===null)rStory()},1000);rStory();
+</script>
+<script>
+/* ===== Gear-lever shift indicator + actual-speed badge (edit here) ===== */
+const GX={P:455,R:473,N:491,D:509},GSEQ=['R','P','N','R','P','D'];let gi=0;
+function setGear(g,bad){['P','R','N','D'].forEach(k=>{const e=$('#g'+k);e.setAttribute('fill',k===g?(bad?'#ff526b':'#5df0bd'):'#6f8bb0');e.setAttribute('font-size',k===g?'13':'10')});
+ $('#lever').style.transform='translateX('+(GX[g]-485)+'px)';const l=$('#gLbl');l.setAttribute('visibility',bad?'visible':'hidden');if(bad){l.textContent='⚠ SHIFT → '+g;l.setAttribute('x',GX[g]+22)}}
+setInterval(()=>{if(hit()&&sel===2)setGear(GSEQ[gi++%GSEQ.length],true);else setGear(run?'D':'P',false)},400);
+setInterval(()=>{const on=hit()&&sel===4;B.classList.toggle('speedatk',on);if(on){$('#acSp').textContent=$('#spd').textContent;$('#acFake').textContent=$('#clv').textContent}},150);
+setGear('P',false);
+</script>
+</body>
+</html>
