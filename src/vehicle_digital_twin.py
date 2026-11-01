@@ -155,10 +155,12 @@ class VehicleDigitalTwin:
         self._accepted_brake_commands: List[Tuple[float, float, int]] = []
         self._last_accel_command: Optional[Tuple[float, float, int]] = None
         self._v2x_hazard_until: float = 0.0
+        self._v2x_hazard_unverified: bool = False
 
         # State and perceived state
         self.mode: DrivingMode = DrivingMode.NORMAL
         self.unsafe_seconds: float = 0.0
+        self.cumulative_unsafe_seconds: float = 0.0
         self.state: VehicleState = VehicleState()
         self.perceived: Dict[str, Any] = {}
         self._signal_timestamps: Dict[str, float] = {}
@@ -170,8 +172,10 @@ class VehicleDigitalTwin:
         """Reset vehicle plant, buffers, and perceived state to initial cruising conditions."""
         self.mode = DrivingMode.NORMAL
         self.unsafe_seconds = 0.0
+        self.cumulative_unsafe_seconds = 0.0
         self._accepted_brake_commands.clear()
         self._v2x_hazard_until = 0.0
+        self._v2x_hazard_unverified = False
         self._last_sim_time = 0.0
 
         initial_speed = self.cruise_kmh
@@ -235,9 +239,10 @@ class VehicleDigitalTwin:
         """Update operational driving mode."""
         self.mode = mode
 
-    def apply_v2x_hazard(self, now: float) -> None:
+    def apply_v2x_hazard(self, now: float, is_unverified: bool = False) -> None:
         """Trigger precrash emergency deceleration following V2X hazard notification."""
         self._v2x_hazard_until = now + self.precrash_duration_s
+        self._v2x_hazard_unverified = is_unverified
 
     def accept_command(self, arb_id: int, signals: Dict[str, Any], now: float) -> None:
         """Process accepted command frames (invoked only if gateway forwards them).
@@ -347,6 +352,8 @@ class VehicleDigitalTwin:
         v2x_decel = 0.0
         if now < self._v2x_hazard_until:
             v2x_decel = self.precrash_decel
+        else:
+            self._v2x_hazard_unverified = False
 
         # 4. Target Speed Determination based on DrivingMode and in-lane constraints:
         if self.mode == DrivingMode.SAFE_MODE:
@@ -363,10 +370,13 @@ class VehicleDigitalTwin:
             acc_decel = min(self.acc_max_brake, speed_err_ms * 0.8)
 
         # 6. Arbitrate Legitimate Deceleration Command:
-        legit_decel = max(driver_decel, aeb_decel, acc_decel, v2x_decel)
-        if aeb_active and aeb_decel >= max(driver_decel, acc_decel, v2x_decel):
+        # If V2X hazard is unverified (hostile spoofed V2X attack forwarded with protection OFF),
+        # this decel is NOT legitimate driver/ADAS intent.
+        v2x_legit = 0.0 if self._v2x_hazard_unverified else v2x_decel
+        legit_decel = max(driver_decel, aeb_decel, acc_decel, v2x_legit)
+        if aeb_active and aeb_decel >= max(driver_decel, acc_decel, v2x_legit):
             brake_source = 1  # AEB
-        elif v2x_decel > 0.0 and v2x_decel >= max(driver_decel, acc_decel):
+        elif v2x_legit > 0.0 and v2x_legit >= max(driver_decel, acc_decel):
             brake_source = 1  # AEB / V2X safety
         elif driver_pedal > 0.0:
             brake_source = 0  # DRIVER
@@ -407,7 +417,10 @@ class VehicleDigitalTwin:
             if (now - cmd[0]) <= self.command_timeout_s
         ]
         self._accepted_brake_commands = valid_brakes
-        target_actuator_decel = max([cmd[1] for cmd in valid_brakes], default=0.0)
+        brake_candidates = [cmd[1] for cmd in valid_brakes]
+        if v2x_decel > 0.0:
+            brake_candidates.append(v2x_decel)
+        target_actuator_decel = max(brake_candidates, default=0.0)
 
         # Accel: last accepted command within command_timeout_s
         target_actuator_accel = 0.0
@@ -452,17 +465,39 @@ class VehicleDigitalTwin:
         is_speed_fresh = (speed_age <= 1.0) and (self.perceived.get("speed_kmh") is not None)
         spoofed_speed_active = is_speed_fresh and (abs(self.perceived["speed_kmh"] - self.state.speed_kmh) > 5.0)
 
+        rpm_age = now - self._signal_timestamps.get("rpm", -999.0)
+        is_rpm_fresh = (rpm_age <= 1.0) and (self.perceived.get("rpm") is not None)
+        expected_rpm = min(7500.0, max(self.rpm_base, self.rpm_base + self.rpm_per_kmh * self.state.speed_kmh))
+        spoofed_rpm_active = is_rpm_fresh and (abs(self.perceived["rpm"] - expected_rpm) > 1500.0)
+
+        gear_age = now - self._signal_timestamps.get("gear", -999.0)
+        is_gear_fresh = (gear_age <= 1.0) and (self.perceived.get("gear") is not None)
+        # If moving forward at speed (> 15 km/h) and perceived gear is Reverse (-1) or Neutral (0)
+        spoofed_gear_active = is_gear_fresh and (self.state.speed_kmh > 15.0 and self.perceived["gear"] <= 0)
+
         if self.state.applied_decel > (legit_decel + 2.0):
             self.state.unsafe = "UNINTENDED BRAKING"
             self.unsafe_seconds += dt
+            self.cumulative_unsafe_seconds += dt
         elif self.state.applied_accel > (legit_accel + 1.5):
             self.state.unsafe = "UNINTENDED ACCELERATION"
             self.unsafe_seconds += dt
+            self.cumulative_unsafe_seconds += dt
         elif spoofed_speed_active:
             self.state.unsafe = "SPOOFED SPEED SHOWN"
             self.unsafe_seconds += dt
+            self.cumulative_unsafe_seconds += dt
+        elif spoofed_gear_active:
+            self.state.unsafe = "HOSTILE GEAR MISMATCH"
+            self.unsafe_seconds += dt
+            self.cumulative_unsafe_seconds += dt
+        elif spoofed_rpm_active:
+            self.state.unsafe = "SPOOFED RPM SHOWN"
+            self.unsafe_seconds += dt
+            self.cumulative_unsafe_seconds += dt
         else:
             self.state.unsafe = ""
+            self.unsafe_seconds = 0.0
 
         self.state.unsafe_seconds = self.unsafe_seconds
         self.state.perceived = self.perceived
@@ -508,6 +543,7 @@ class VehicleDigitalTwin:
             "aeb": bool(self.state.aeb),
             "unsafe": self.state.unsafe,
             "unsafe_seconds": round(self.unsafe_seconds, 2),
+            "cumulative_unsafe_seconds": round(self.cumulative_unsafe_seconds, 2),
             "perceived": perceived_out,
             "perceived_age_s": perceived_age_s,
         }

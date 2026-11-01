@@ -116,6 +116,18 @@ attacks:
     spoof_rpm: 7000
   v2x:
     rate_hz: 10
+  entry_points:
+    spoof_brake: "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+    spoof_accel: "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+    spoof_speed: "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+    spoof_rpm: "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+    spoof_gear: "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+    flood: "Malicious OBD-II device"
+    fuzz: "Malicious OBD-II device"
+    replay: "Recorded traffic replayed via a compromised node"
+    v2x_phantom: "Malicious V2X transmitter / compromised on-board V2X unit"
+    v2x_fake_ebrake: "Malicious V2X transmitter / compromised on-board V2X unit"
+    v2x_gps: "Spoofed position broadcast"
 
 dashboard:
   host: "127.0.0.1"

@@ -26,6 +26,7 @@ import time
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from src import load_config
+from src.attack_injector import resolve_entry_point
 from src.can_simulator import (
     COMMAND_IDS,
     DBC,
@@ -88,18 +89,24 @@ class IncidentRecord:
     latency_ms: float
     count: int = 1
     details: str = ""
+    start_ts: float = 0.0
+    assumed_entry_point: str = ""
 
     def to_dashboard_dict(self) -> Dict[str, Any]:
         """Format matching CONTRACT item 62 for dashboard display."""
         return {
             "id": self.id,
             "ts": round(self.ts, 3),
+            "start_ts": round(self.start_ts, 3),
             "attack_type": self.attack_type,
             "level": self.level,
             "target": self.target,
             "confidence": round(self.confidence, 3),
+            "explanation": self.explanation,
+            "action": self.action,
             "latency_ms": round(self.latency_ms, 2),
             "count": self.count,
+            "assumed_entry_point": self.assumed_entry_point,
         }
 
 
@@ -145,6 +152,7 @@ class FailSafeManager:
         self.quarantine_expiry: Dict[int, float] = {}  # arb_id -> expiry_ts
         self.token_buckets: Dict[int, TokenBucket] = {}
         self.rate_limited_active_ids: Set[int] = set()
+        self.rate_limited_expiry: Dict[int, float] = {}
 
         # Lockout Watchdog & Starvation (CONTRACT / FIX 3 & FIX 5)
         self.fast_recovery: bool = False
@@ -194,10 +202,15 @@ class FailSafeManager:
                         action TEXT,
                         latency_ms REAL,
                         count INTEGER DEFAULT 1,
-                        details TEXT
+                        details TEXT,
+                        assumed_entry_point TEXT
                     )
                     """
                 )
+                try:
+                    conn.execute("ALTER TABLE incidents ADD COLUMN assumed_entry_point TEXT DEFAULT ''")
+                except Exception:
+                    pass
                 conn.commit()
         except Exception as exc:
             logger.warning("Could not initialize SQLite database %s: %s", self.db_path, exc)
@@ -222,6 +235,8 @@ class FailSafeManager:
                     self._set_mode(self.MODE_NORMAL, now, "Timed recovery to NORMAL (< 3s)")
                     self.last_recovery_time = now
                     self.rate_limited_active_ids.clear()
+                    self.rate_limited_expiry.clear()
+                    self.rate_limited_expiry.clear()
                     self.quarantine_expiry.clear()
                     self.last_alert_time = -100.0
                     return self.current_mode
@@ -248,6 +263,7 @@ class FailSafeManager:
                     self.last_recovery_time = now
                     self._set_mode(self.MODE_NORMAL, now, "Timed recovery from ALERT")
                     self.rate_limited_active_ids.clear()
+                    self.rate_limited_expiry.clear()
 
             return self.current_mode
 
@@ -289,17 +305,21 @@ class FailSafeManager:
             if frame.arb_id in self.quarantine_expiry:
                 expiry = self.quarantine_expiry[frame.arb_id]
                 if curr_time < expiry:
-                    # Refresh quarantine on active traffic
-                    self.quarantine_expiry[frame.arb_id] = curr_time + 5.0
+                    # Quarantined: drop frame without resetting countdown indefinitely on incoming frames
                     return False
                 else:
                     del self.quarantine_expiry[frame.arb_id]
 
             # 2. Token Bucket Rate Limiting for active rate-limited IDs
             if frame.arb_id in self.rate_limited_active_ids:
-                bucket = self._get_or_create_bucket(frame.arb_id)
-                if not bucket.consume(curr_time):
-                    return False
+                exp = self.rate_limited_expiry.get(frame.arb_id, 0.0)
+                if exp > 0.0 and curr_time > exp:
+                    self.rate_limited_active_ids.discard(frame.arb_id)
+                    self.rate_limited_expiry.pop(frame.arb_id, None)
+                else:
+                    bucket = self._get_or_create_bucket(frame.arb_id)
+                    if not bucket.consume(curr_time):
+                        return False
 
             return True
 
@@ -383,7 +403,7 @@ class FailSafeManager:
                 if self.current_mode == self.MODE_NORMAL:
                     self._set_mode(self.MODE_ALERT, curr_time, f"High risk event on 0x{frame.arb_id:03X}")
 
-                if is_unknown or decision.attack_type == "Fuzzing":
+                if is_unknown:
                     if self.protection_enabled:
                         self.quarantine_expiry[frame.arb_id] = curr_time + 5.0
                         forward = False
@@ -393,9 +413,19 @@ class FailSafeManager:
                     actions.append(act)
                     self.recent_actions.append(act)
 
+                elif decision.attack_type == "Fuzzing":
+                    forward = False
+                    if self.protection_enabled:
+                        act = f"Dropped fuzzed payload on known ID 0x{frame.arb_id:03X}"
+                    else:
+                        act = f"Observed fuzzed payload on 0x{frame.arb_id:03X} (protection OFF: forwarded)"
+                    actions.append(act)
+                    self.recent_actions.append(act)
+
                 elif decision.attack_type == "Flooding":
                     if self.protection_enabled:
                         self.rate_limited_active_ids.add(frame.arb_id)
+                        self.rate_limited_expiry[frame.arb_id] = curr_time + 1.5
                         forward = self.gate(frame, curr_time)
                         act = f"Rate-limited flooding stream 0x{frame.arb_id:03X}"
                     else:
@@ -458,8 +488,17 @@ class FailSafeManager:
                 if len(hist) >= 10 and (curr_time - hist[0][0]) >= 0.90:
                     n_blk = sum(1 for item in hist if item[1])
                     if (n_blk / len(hist)) > 0.90:
-                        valid_incs = sum(1 for i in range(1, len(hist)) if hist[i][2] == (hist[i-1][2] + 1) % 16)
-                        if valid_incs >= 3:
+                        consec = 0
+                        max_consec = 0
+                        for i in range(1, len(hist)):
+                            if hist[i][2] == (hist[i-1][2] + 1) % 16:
+                                consec += 1
+                                max_consec = max(max_consec, consec)
+                            else:
+                                consec = 0
+                        # Resync only if clean run of at least 3 consecutive strictly sequential counter increments
+                        # and no active CRITICAL risk on this frame
+                        if max_consec >= 3 and decision.level < RiskLevel.CRITICAL:
                             self.quarantine_expiry.pop(frame.arb_id, None)
                             self.rate_limited_active_ids.discard(frame.arb_id)
                             if self.resync_callback is not None:
@@ -588,25 +627,36 @@ class FailSafeManager:
         now: float,
     ) -> None:
         """Record forensic incident into SQLite and JSONL with repeat deduplication."""
-        # Check for incident merging within incident_merge_s
-        if (
-            self._last_merged_incident is not None
-            and self._last_merged_incident.attack_type == decision.attack_type
-            and self._last_merged_incident.level == decision.level.name
-            and self._last_merged_incident.target == target
-            and (now - self._last_merged_incident.ts) <= self.incident_merge_s
-        ):
+        # Check for incident merging: floods merge as ONE incident with running count and duration
+        is_flood = (decision.attack_type == "Flooding")
+        can_merge = False
+
+        if self._last_merged_incident is not None:
+            same_target = (self._last_merged_incident.target == target)
+            same_type = (self._last_merged_incident.attack_type == decision.attack_type)
+            if is_flood and same_target and same_type:
+                can_merge = (now - self._last_merged_incident.ts) <= 5.0
+            elif same_target and same_type and self._last_merged_incident.level == decision.level.name:
+                can_merge = (now - self._last_merged_incident.ts) <= self.incident_merge_s
+
+        if can_merge:
             # Merge into previous incident
             self._last_merged_incident.count += 1
             self._last_merged_incident.ts = now
-            self._last_merged_incident.explanation = decision.explanation
+            if is_flood:
+                dur = max(0.01, now - self._last_merged_incident.start_ts)
+                self._last_merged_incident.explanation = (
+                    f"Flood on {target}: {self._last_merged_incident.count} msgs, rate-limited, {dur:.1f}s"
+                )
+            else:
+                self._last_merged_incident.explanation = decision.explanation
             inc_id = self._last_merged_incident.id
 
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute(
                         "UPDATE incidents SET count = ?, ts = ?, explanation = ? WHERE id = ?",
-                        (self._last_merged_incident.count, now, decision.explanation, inc_id),
+                        (self._last_merged_incident.count, now, self._last_merged_incident.explanation, inc_id),
                     )
                     conn.commit()
             except Exception as exc:
@@ -616,6 +666,12 @@ class FailSafeManager:
 
         # New Incident
         self.incident_id_counter += 1
+        expl_text = decision.explanation
+        if is_flood:
+            expl_text = f"Flood on {target}: 1 msgs, rate-limited, 0.0s"
+
+        assumed_ep = resolve_entry_point(decision.attack_type, self.cfg)
+
         rec = IncidentRecord(
             id=self.incident_id_counter,
             ts=now,
@@ -623,11 +679,13 @@ class FailSafeManager:
             level=decision.level.name,
             target=target,
             confidence=decision.confidence,
-            explanation=decision.explanation,
+            explanation=expl_text,
             action=decision.action,
             latency_ms=decision.components.get("latency_ms", 0.5),
             count=1,
             details=json.dumps(decision.components),
+            start_ts=now,
+            assumed_entry_point=assumed_ep,
         )
 
         self._last_merged_incident = rec
@@ -638,8 +696,8 @@ class FailSafeManager:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(
                     """
-                    INSERT INTO incidents (id, ts, attack_type, level, target, confidence, explanation, action, latency_ms, count, details)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO incidents (id, ts, attack_type, level, target, confidence, explanation, action, latency_ms, count, details, assumed_entry_point)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         rec.id,
@@ -653,6 +711,7 @@ class FailSafeManager:
                         rec.latency_ms,
                         rec.count,
                         rec.details,
+                        rec.assumed_entry_point,
                     ),
                 )
                 conn.commit()

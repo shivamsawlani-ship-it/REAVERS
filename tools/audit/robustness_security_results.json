@@ -1,0 +1,16 @@
+{
+  "hardcoded_paths": [],
+  "network_port_exposure": {
+    "udp_47474_binding": "sock.bind((\"127.0.0.1\", self.udp_port))",
+    "dashboard_host_binding": "uvicorn.run(app, host=host, port=port, log_level=\"info\")"
+  },
+  "offline_assets": {
+    "index_html_external_dependencies": [],
+    "fully_offline": true
+  },
+  "model_missing_fallback": {
+    "anomaly_detector_graceful_fallback": true,
+    "anomaly_detector_backend_fallback": "iforest",
+    "attack_classifier_graceful_fallback": true
+  }
+}

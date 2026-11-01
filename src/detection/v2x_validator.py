@@ -169,9 +169,10 @@ class V2XValidator:
             pos_valid = False
             reasons.append(f"Transmitter lateral position {msg.y:.1f} m is off-road (road width ±12 m)")
 
-        if msg.speed < 0.0 or msg.speed > 60.0:
+        # Speed physical plausibility: tolerance for small numerical float roundoff (-0.05 m/s)
+        if msg.speed < -0.05 or msg.speed > 65.0:
             pos_valid = False
-            reasons.append(f"Claimed speed {msg.speed:.1f} m/s ({msg.speed*3.6:.1f} km/h) outside physical bounds [0, 60]")
+            reasons.append(f"Claimed speed {msg.speed:.1f} m/s ({msg.speed*3.6:.1f} km/h) outside physical bounds [0, 65]")
 
         pos_score = 1.0 if pos_valid else 0.0
 
@@ -183,17 +184,18 @@ class V2XValidator:
             prev_ts, prev_x, prev_y, prev_spd = self._beacon_history[msg.sender_id]
             dt_beacon = msg.timestamp - prev_ts
 
-            if 0.001 < dt_beacon < 5.0:
+            # Sane dt threshold: at least 50 ms to avoid division-by-near-zero acceleration spikes
+            if dt_beacon >= 0.050 and dt_beacon < 5.0:
                 expected_x = prev_x + prev_spd * dt_beacon
                 jump_m = abs(msg.x - expected_x)
-                # Allow tolerance for acceleration: 0.5 * a_max * dt^2
                 jump_tol = 15.0 + 0.5 * 10.0 * (dt_beacon ** 2)
+                implied_accel = abs(msg.speed - prev_spd) / dt_beacon
 
-                if jump_m > jump_tol:
+                if jump_m > jump_tol or implied_accel > 12.0:
                     kin_score = 0.0
                     dt_ms = max(1.0, dt_beacon * 1000.0)
                     reasons.append(
-                        f"Claimed position jumped {jump_m:.1f} m in {dt_ms:.0f} ms (violates vehicle dynamics)"
+                        f"Claimed position/accel jump (pos {jump_m:.1f} m, accel {implied_accel:.1f} m/s²) in {dt_ms:.0f} ms"
                     )
 
         # -------------------------------------------------------------------

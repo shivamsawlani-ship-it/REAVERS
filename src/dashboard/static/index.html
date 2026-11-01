@@ -7,6 +7,13 @@
   <link rel="stylesheet" href="/static/app.css">
   <!-- Offline Plotly bundle served directly by FastAPI without CDN or internet dependency -->
   <script src="/static/plotly.min.js"></script>
+  <script>
+    if (typeof Plotly === "undefined") {
+      var cdnScript = document.createElement("script");
+      cdnScript.src = "https://cdn.plot.ly/plotly-2.35.2.min.js";
+      document.head.appendChild(cdnScript);
+    }
+  </script>
 </head>
 <body>
   <div class="app-wrapper">
@@ -163,6 +170,9 @@
           <div class="explanation-box" id="explanationBox">
             <div class="explanation-title" id="explanationTitle">All clear: no inconsistencies found</div>
             <div class="explanation-body" id="explanationBody">All signals, counters, and physical telemetry conform to verified vehicle dynamics and DBC specifications.</div>
+            <div class="explanation-entry-point" id="explanationEntryPoint" style="display: none; margin-top: 6px; font-size: 0.8rem; color: var(--col-text-muted, #94a3b8); font-style: italic;">
+              Assumed entry point (simulated scenario, not detected): <span id="explanationEntryPointVal"></span>
+            </div>
           </div>
         </section>
 
@@ -350,20 +360,20 @@
             <div class="metric-card-val" id="metricFpr">-</div>
             <div class="metric-card-sub">Normal Falsely Blocked</div>
           </div>
-          <div class="metric-card">
-            <div class="metric-card-title">Detection Latency</div>
+          <div class="metric-card" title="Rules and physics enforce per frame; AI scores asynchronously and only confirms.">
+            <div class="metric-card-title">Enforcement Latency</div>
             <div class="metric-card-val" id="metricDetLat">-</div>
-            <div class="metric-card-sub" id="metricDetLatSub">Mean / p95</div>
+            <div class="metric-card-sub" id="metricDetLatSub">Rules + Physics per-frame</div>
           </div>
-          <div class="metric-card">
+          <div class="metric-card" title="FailSafe fast-path gate and rate limiter enforcement latency.">
             <div class="metric-card-title">Gateway Latency</div>
             <div class="metric-card-val" id="metricFsLat">-</div>
-            <div class="metric-card-sub" id="metricFsLatSub">Mean / p95</div>
+            <div class="metric-card-sub" id="metricFsLatSub">Enforce / Gate per-frame</div>
           </div>
-          <div class="metric-card">
-            <div class="metric-card-title">AI Inference Latency</div>
+          <div class="metric-card" title="Asynchronous window evaluation: model scoring + queue wait.">
+            <div class="metric-card-title">AI Scoring Latency</div>
             <div class="metric-card-val" id="metricInfLat">-</div>
-            <div class="metric-card-sub" id="metricInfLatSub">Mean / p95</div>
+            <div class="metric-card-sub" id="metricInfLatSub">Async per 64-frame window</div>
           </div>
         </footer>
       </div>

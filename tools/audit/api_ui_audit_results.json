@@ -1,0 +1,79 @@
+{
+  "endpoint_tests": [
+    {
+      "endpoint": "GET /api/health",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "endpoint": "GET /api/snapshot",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "endpoint": "POST /api/attack/spoof_brake/start",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "endpoint": "POST /api/attack/spoof_brake/stop",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "endpoint": "POST /api/scenario/real_obstacle",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "endpoint": "POST /api/protection",
+      "status": 200,
+      "passed": true
+    },
+    {
+      "endpoint": "POST /api/reset",
+      "status": 200,
+      "passed": true
+    }
+  ],
+  "errors": [],
+  "unknown_attack_test": {
+    "status": 404,
+    "expected": 404,
+    "passed": true
+  },
+  "invalid_payload_test": {
+    "status": 422,
+    "expected": 422,
+    "passed": true
+  },
+  "rapid_burst_test": {
+    "requests": 50,
+    "successful": 50,
+    "elapsed_ms": 294.92,
+    "passed": true
+  },
+  "xss_injection_test": {
+    "status": 404,
+    "content_type": "application/json",
+    "body_contains_raw_script": false,
+    "passed": true
+  },
+  "websocket_test": {
+    "passed": true,
+    "received_keys": [
+      "t",
+      "mode",
+      "protection",
+      "backend",
+      "banner"
+    ]
+  },
+  "guided_demo_test": {
+    "start_status": 200,
+    "started": true,
+    "stop_status": 200,
+    "stopped": true,
+    "passed": true
+  }
+}

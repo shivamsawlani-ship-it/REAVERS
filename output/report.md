@@ -15,8 +15,8 @@ every actuator command and status frame in microseconds before applying commands
 | Metric | Result | System Significance |
 |---|---|---|
 | **Safety-Critical Attack Recall** | **100.00%** | 100% of malicious deceleration, steering, and gear commands blocked |
-| **False Positive Rate (FPR)** | **9.40%** | Minimal disruption to legitimate automotive operations |
-| **Mean Fast-Path Latency** | **35.3 µs** | Operates comfortably within 20ms automotive CAN cycle limits |
+| **False Positive Rate (FPR)** | **9.43%** | Minimal disruption to legitimate automotive operations |
+| **Mean Fast-Path Latency** | **72.5 µs** | Operates comfortably within 20ms automotive CAN cycle limits |
 | **Hard-Negative AEB Block Rate** | **0.00%** | Legitimate emergency braking commands are NEVER falsely blocked |
 | **Classifier Macro F1-Score** | **0.9999** | Robust multi-class attribution across attack vectors |
 
@@ -57,11 +57,11 @@ The fast-path executes inline for every frame: Gate $\rightarrow$ Rule Engine $\
 
 | Latency Percentile | Execution Time (Microseconds) | Execution Time (Milliseconds) | Automotive Feasibility |
 |---|---|---|---|
-| **Mean** | **35.3 µs** | 0.035 ms | Pass (< 20.0 ms CAN period) |
-| **Median (p50)** | **10.1 µs** | 0.010 ms | Pass |
-| **95th Percentile (p95)** | **47.3 µs** | 0.047 ms | Pass |
-| **99th Percentile (p99)** | **116.6 µs** | 0.117 ms | Pass |
-| **Maximum Latency** | **24389.1 µs** | 24.389 ms | Pass |
+| **Mean** | **72.5 µs** | 0.072 ms | Pass (< 20.0 ms CAN period) |
+| **Median (p50)** | **43.1 µs** | 0.043 ms | Pass |
+| **95th Percentile (p95)** | **75.1 µs** | 0.075 ms | Pass |
+| **99th Percentile (p99)** | **181.5 µs** | 0.181 ms | Pass |
+| **Maximum Latency** | **72299.3 µs** | 72.299 ms | Pass |
 
 ## 3. Four-Configuration Ablation Study (The Key Slide)
 
@@ -78,9 +78,9 @@ were evaluated across four architectural configurations:
 | Configuration | False Positives | False Positive Rate (FPR) | Missed SC Attacks | Safety-Critical Recall | Overall Recall | Legitimate AEB Block Rate |
 |---|---|---|---|---|---|---|
 | **Config 1: AI Only** | 50 | **0.03%** | 8,152 | **0.00%** | 0.00% | **100.00%** |
-| **Config 2: AI + CAN Rules** | 14,382 | **9.99%** | 100 | **98.77%** | 99.72% | **0.00%** |
-| **Config 3: + V2X Validation** | 14,382 | **9.99%** | 100 | **98.77%** | 99.72% | **0.00%** |
-| **Config 4: Full System (All)** | 13,531 | **9.39%** | 0 | **100.00%** | 99.86% | **0.00%** |
+| **Config 2: AI + CAN Rules** | 14,382 | **9.99%** | 100 | **98.77%** | 99.47% | **0.00%** |
+| **Config 3: + V2X Validation** | 14,382 | **9.99%** | 100 | **98.77%** | 99.50% | **0.00%** |
+| **Config 4: Full System (All)** | 13,583 | **9.43%** | 0 | **100.00%** | 99.64% | **0.00%** |
 
 ![Ablation Comparison](figures/ablation_comparison.png)
 

@@ -300,8 +300,9 @@ class Environment:
         x = self.ego_x + spec["base_dx"] + osc_x
         y = spec["base_dy"] + osc_y
 
-        # Speed is ego_speed plus rate of oscillation
-        vx = self.ego_speed + spec["amp_x"] * (2.0 * math.pi * spec["freq"]) * math.cos(2.0 * math.pi * spec["freq"] * now)
+        # Speed is ego_speed plus rate of oscillation (clamped >= 0.0, never negative)
+        raw_vx = self.ego_speed + spec["amp_x"] * (2.0 * math.pi * spec["freq"]) * math.cos(2.0 * math.pi * spec["freq"] * now)
+        vx = max(0.0, raw_vx)
         return (x, y, vx)
 
     def sense(self, ego_speed_kmh: float, now: float = 0.0) -> SensorSnapshot:

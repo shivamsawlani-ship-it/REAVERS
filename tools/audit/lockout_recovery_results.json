@@ -1,0 +1,27 @@
+[
+  {
+    "test": "drop_20_frames",
+    "mode": "NORMAL",
+    "incidents": 0,
+    "passed": true
+  },
+  {
+    "test": "pipeline_delay",
+    "new_incidents": 0,
+    "mode": "NORMAL",
+    "passed": true
+  },
+  {
+    "test": "stop_attack_midway",
+    "recovered": true,
+    "recovery_time_s": 1.2553143501281738
+  },
+  {
+    "test": "toggle_protection",
+    "passed": true
+  },
+  {
+    "test": "reset_during_attack",
+    "passed": false
+  }
+]

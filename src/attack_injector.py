@@ -35,16 +35,99 @@ from src.v2x_simulator import TrustStore, V2XMessage
 
 
 # ---------------------------------------------------------------------------
+# Threat Model & Entry Points Metadata
+# ---------------------------------------------------------------------------
+
+DEFAULT_ENTRY_POINTS: Dict[str, str] = {
+    "spoof_brake": "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)",
+    "spoof_accel": "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)",
+    "spoof_speed": "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)",
+    "spoof_rpm": "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)",
+    "spoof_gear": "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)",
+    "flood": "Malicious OBD-II device",
+    "fuzz": "Malicious OBD-II device",
+    "replay": "Recorded traffic replayed via a compromised node",
+    "v2x_phantom": "Malicious V2X transmitter / compromised on-board V2X unit",
+    "v2x_fake_ebrake": "Malicious V2X transmitter / compromised on-board V2X unit",
+    "v2x_gps": "Spoofed position broadcast",
+}
+
+
+def resolve_entry_point(attack_identifier: Optional[str], cfg: Optional[Any] = None) -> str:
+    """Resolve assumed entry point description for an attack name or attributed attack type.
+
+    Simulation metadata assumption: CAVShield does not claim to detect radio or physical entry points;
+    this attributes the simulated injection vector according to the vehicle threat model.
+    """
+    if not attack_identifier or attack_identifier in ("Normal", "None", ""):
+        return ""
+
+    table = dict(DEFAULT_ENTRY_POINTS)
+    if cfg is not None:
+        attacks_cfg = getattr(cfg, "attacks", {})
+        entry_pts_cfg = getattr(attacks_cfg, "entry_points", {})
+        if isinstance(entry_pts_cfg, dict):
+            table.update(entry_pts_cfg)
+
+    # Direct match
+    if attack_identifier in table:
+        return table[attack_identifier]
+
+    ident_lower = str(attack_identifier).lower().strip()
+    if ident_lower in table:
+        return table[ident_lower]
+
+    # Pattern match on name or attributed label
+    if "flood" in ident_lower:
+        return table.get("flood", DEFAULT_ENTRY_POINTS["flood"])
+    if "fuzz" in ident_lower:
+        return table.get("fuzz", DEFAULT_ENTRY_POINTS["fuzz"])
+    if "replay" in ident_lower:
+        return table.get("replay", DEFAULT_ENTRY_POINTS["replay"])
+    if "phantom" in ident_lower:
+        return table.get("v2x_phantom", DEFAULT_ENTRY_POINTS["v2x_phantom"])
+    if "fake_ebrake" in ident_lower or "fake e-brake" in ident_lower:
+        return table.get("v2x_fake_ebrake", DEFAULT_ENTRY_POINTS["v2x_fake_ebrake"])
+    if "gps" in ident_lower:
+        return table.get("v2x_gps", DEFAULT_ENTRY_POINTS["v2x_gps"])
+    if "brake" in ident_lower and ("spoof" in ident_lower or "0x200" in ident_lower):
+        return table.get("spoof_brake", DEFAULT_ENTRY_POINTS["spoof_brake"])
+    if "accel" in ident_lower and ("spoof" in ident_lower or "0x201" in ident_lower):
+        return table.get("spoof_accel", DEFAULT_ENTRY_POINTS["spoof_accel"])
+    if "speed" in ident_lower and ("spoof" in ident_lower or "0x101" in ident_lower):
+        return table.get("spoof_speed", DEFAULT_ENTRY_POINTS["spoof_speed"])
+    if "rpm" in ident_lower and ("spoof" in ident_lower or "0x100" in ident_lower):
+        return table.get("spoof_rpm", DEFAULT_ENTRY_POINTS["spoof_rpm"])
+    if "gear" in ident_lower and ("spoof" in ident_lower or "0x104" in ident_lower):
+        return table.get("spoof_gear", DEFAULT_ENTRY_POINTS["spoof_gear"])
+    if ident_lower.startswith("spoof") or "spoof" in ident_lower:
+        return table.get("spoof_brake", "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)")
+    if "v2x" in ident_lower:
+        return table.get("v2x_phantom", "Malicious V2X transmitter / compromised on-board V2X unit")
+
+    return "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+
+
+# ---------------------------------------------------------------------------
 # Base Attack Class
 # ---------------------------------------------------------------------------
 
 class Attack:
     """Base class for all cyber-physical attacks."""
 
-    def __init__(self, name: str, rate_hz: float = 100.0, rng: Optional[random.Random] = None):
+    def __init__(
+        self,
+        name: str,
+        rate_hz: float = 100.0,
+        rng: Optional[random.Random] = None,
+        entry_point: Optional[str] = None,
+    ):
         self.name = name
         self.rate_hz = rate_hz
         self.rng = rng or random.Random(42)
+        self.entry_point = entry_point or DEFAULT_ENTRY_POINTS.get(
+            name, "Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular)"
+        )
         self.active: bool = False
         self.start_time: float = 0.0
         self.duration: Optional[float] = None
@@ -576,6 +659,14 @@ class AttackInjector:
             "v2x_gps": V2XGpsAttack(trust_store=self.trust_store, rate_hz=10.0, rng=self.rng),
         }
 
+        # Apply configuration entry point overrides if provided
+        attacks_cfg = getattr(cfg, "attacks", {})
+        entry_pts_cfg = getattr(attacks_cfg, "entry_points", {})
+        if isinstance(entry_pts_cfg, dict):
+            for name, ep in entry_pts_cfg.items():
+                if name in self.attacks:
+                    self.attacks[name].entry_point = str(ep)
+
         # UDP Command Server
         can_cfg = getattr(cfg, "can", {})
         self.udp_port: int = int(getattr(can_cfg, "command_udp_port", 47474))
@@ -619,6 +710,13 @@ class AttackInjector:
     def active(self) -> List[str]:
         """Return list of names of currently active attacks."""
         return [name for name, atk in self.attacks.items() if atk.active]
+
+    def get_entry_point(self, name: str) -> str:
+        """Return assumed entry point metadata for an attack."""
+        atk = self.attacks.get(name)
+        if atk is not None:
+            return atk.entry_point
+        return resolve_entry_point(name, self.cfg)
 
     def tick(self, now: float, ctx: Optional[Any] = None) -> Tuple[List[CANFrame], List[V2XMessage]]:
         """Step all active attacks and collect injected CAN frames and V2X messages."""

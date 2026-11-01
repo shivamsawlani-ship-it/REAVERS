@@ -96,6 +96,7 @@ def evaluate_window_models(
     test_mask: np.ndarray,
     output_models_dir: Path,
     output_figures_dir: Path,
+    train_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Evaluate IsolationForest and AttackClassifier on held-out test windows."""
     logger.info("Evaluating ML models on %d held-out test windows...", int(np.sum(test_mask)))
@@ -232,7 +233,74 @@ def evaluate_window_models(
             "support": int(np.sum(y_test == cname)),
         }
 
-    # 3. Generate PNG Figures via Headless Matplotlib
+    # 3. Evaluate Multi-Class Attack Classifier on strictly BALANCED Test Set
+    classes_present = sorted(list(set(y_test)))
+    class_indices: Dict[str, List[int]] = {c: [] for c in classes_present}
+    for idx, label in enumerate(y_test):
+        class_indices[label].append(idx)
+
+    min_count = min(len(idxs) for idxs in class_indices.values())
+    logger.info("Building balanced test set: %d windows per class across classes %s", min_count, classes_present)
+
+    rng_bal = np.random.default_rng(42)
+    balanced_indices: List[int] = []
+    for c in classes_present:
+        chosen = rng_bal.choice(class_indices[c], size=min_count, replace=False)
+        balanced_indices.extend(chosen)
+    rng_bal.shuffle(balanced_indices)
+    balanced_indices_arr = np.array(balanced_indices)
+
+    X_test_bal = X_test[balanced_indices_arr]
+    y_test_bal = y_test[balanced_indices_arr]
+
+    y_pred_bal = clf.predict(X_test_bal)
+    cm_bal = confusion_matrix(y_test_bal, y_pred_bal, labels=clf_classes)
+
+    bal_acc = float(accuracy_score(y_test_bal, y_pred_bal))
+    bal_macro_prec = float(precision_score(y_test_bal, y_pred_bal, labels=clf_classes, average="macro", zero_division=0))
+    bal_macro_rec = float(recall_score(y_test_bal, y_pred_bal, labels=clf_classes, average="macro", zero_division=0))
+    bal_macro_f1 = float(f1_score(y_test_bal, y_pred_bal, labels=clf_classes, average="macro", zero_division=0))
+
+    per_class_f1_bal = f1_score(y_test_bal, y_pred_bal, labels=clf_classes, average=None, zero_division=0)
+    per_class_prec_bal = precision_score(y_test_bal, y_pred_bal, labels=clf_classes, average=None, zero_division=0)
+    per_class_rec_bal = recall_score(y_test_bal, y_pred_bal, labels=clf_classes, average=None, zero_division=0)
+
+    per_class_metrics_bal: Dict[str, Any] = {}
+    for i, cname in enumerate(clf_classes):
+        tp_c = cm_bal[i, i]
+        fp_c = int(np.sum(cm_bal[:, i]) - tp_c)
+        fn_c = int(np.sum(cm_bal[i, :]) - tp_c)
+        tn_c = int(np.sum(cm_bal) - tp_c - fp_c - fn_c)
+        fpr_c = float(fp_c / max(fp_c + tn_c, 1))
+
+        per_class_metrics_bal[cname] = {
+            "precision": round(float(per_class_prec_bal[i]), 4),
+            "recall": round(float(per_class_rec_bal[i]), 4),
+            "f1": round(float(per_class_f1_bal[i]), 4),
+            "fpr": round(fpr_c, 4),
+            "support": int(np.sum(y_test_bal == cname)),
+        }
+
+    # 4. Validation Threshold Calibration for Anomaly Detection (Frozen on Normal Validation)
+    if train_mask is not None:
+        normal_train_idxs = np.where(train_mask & (y == "Normal"))[0]
+        rng_val = np.random.default_rng(42)
+        rng_val.shuffle(normal_train_idxs)
+        n_val = max(10, int(len(normal_train_idxs) * 0.20))
+        val_normal_idxs = normal_train_idxs[:n_val]
+        X_val_norm = scaler.transform(X_stat[val_normal_idxs])
+        val_scores = -iso_forest.score_samples(X_val_norm)
+        val_threshold = float(np.percentile(val_scores, 99.7))
+    else:
+        val_threshold = raw_threshold
+
+    old_test_fpr = float(np.sum((raw_scores >= raw_threshold) & (y_test_binary == 0)) / max(np.sum(y_test_binary == 0), 1))
+    new_test_fpr = float(np.sum((raw_scores >= val_threshold) & (y_test_binary == 0)) / max(np.sum(y_test_binary == 0), 1))
+
+    logger.info("IsolationForest Threshold Audit: Train Thresh=%.4f (Test FPR=%.4f) -> Val-Calibrated Thresh=%.4f (Test FPR=%.4f)",
+                raw_threshold, old_test_fpr, val_threshold, new_test_fpr)
+
+    # 5. Generate PNG Figures via Headless Matplotlib
     output_figures_dir.mkdir(parents=True, exist_ok=True)
 
     # Figure 1: Confusion Matrix
@@ -267,7 +335,8 @@ def evaluate_window_models(
     fig, ax = plt.subplots(figsize=(7, 4.5), dpi=150)
     ax.hist(normal_scores, bins=40, alpha=0.6, label="Normal Windows", color="#10b981", density=True)
     ax.hist(attack_scores, bins=40, alpha=0.6, label="Attack Windows", color="#ef4444", density=True)
-    ax.axvline(raw_threshold, color="#38bdf8", linestyle="--", linewidth=2, label=f"Threshold ({raw_threshold:.3f})")
+    ax.axvline(raw_threshold, color="#38bdf8", linestyle="--", linewidth=2, label=f"Train Thresh ({raw_threshold:.3f})")
+    ax.axvline(val_threshold, color="#a855f7", linestyle=":", linewidth=2, label=f"Val Thresh ({val_threshold:.3f})")
     ax.set_title("IsolationForest Anomaly Score Distribution (Normal vs. Attack)")
     ax.set_xlabel("Raw Anomaly Score (-score_samples)")
     ax.set_ylabel("Probability Density")
@@ -323,11 +392,274 @@ def evaluate_window_models(
             "per_class": per_class_metrics,
             "confusion_matrix": cm.tolist(),
         },
+        "balanced_classifier": {
+            "accuracy": round(bal_acc, 4),
+            "macro_precision": round(bal_macro_prec, 4),
+            "macro_recall": round(bal_macro_rec, 4),
+            "macro_f1": round(bal_macro_f1, 4),
+            "classes": clf_classes,
+            "per_class": per_class_metrics_bal,
+            "confusion_matrix": cm_bal.tolist(),
+            "windows_per_class": min_count,
+            "total_windows": len(y_test_bal),
+        },
+        "validation_threshold": {
+            "raw_threshold_train": round(raw_threshold, 6),
+            "val_threshold_frozen": round(val_threshold, 6),
+            "old_test_fpr": round(old_test_fpr, 6),
+            "new_test_fpr": round(new_test_fpr, 6),
+        },
     }
 
 
 # ---------------------------------------------------------------------------
-# 2. Frame-Level Fast-Path Replay Evaluation
+# 2. Event-Level Evaluation (Episode Detection & False Alarms / Hour)
+# ---------------------------------------------------------------------------
+
+def evaluate_event_level(
+    df_can: pd.DataFrame,
+    test_runs: Sequence[str],
+    cfg: Any,
+) -> Dict[str, Any]:
+    """Evaluate detection at the episode/event level and normal driving false alarm rate."""
+    logger.info("Computing event-level and episode detection metrics across %d test runs...", len(test_runs))
+
+    episodes: List[Dict[str, Any]] = []
+    normal_segments: List[Dict[str, Any]] = []
+
+    # Identify episodes per run
+    for run_id in test_runs:
+        df_run = df_can[df_can["run_id"] == run_id].sort_values(by="ts")
+        rows = df_run.to_dict(orient="records")
+        if not rows:
+            continue
+
+        curr_label = rows[0].get("label", "Normal")
+        curr_subtype = rows[0].get("subtype", "")
+        start_ts = float(rows[0]["ts"])
+        prev_ts = start_ts
+        ep_frames = [rows[0]]
+
+        for r in rows[1:]:
+            r_ts = float(r["ts"])
+            r_label = r.get("label", "Normal")
+            r_subtype = r.get("subtype", "")
+
+            # Contiguous segment of same label and subtype within 1.0s gap
+            if r_label == curr_label and (r_subtype == curr_subtype or curr_label == "Normal") and (r_ts - prev_ts) < 1.0:
+                ep_frames.append(r)
+                prev_ts = r_ts
+            else:
+                dur = prev_ts - start_ts
+                if curr_label != "Normal":
+                    episodes.append({
+                        "run_id": run_id,
+                        "attack_type": curr_label,
+                        "subtype": curr_subtype,
+                        "start_ts": start_ts,
+                        "end_ts": prev_ts,
+                        "duration_s": max(dur, 0.05),
+                        "frames": ep_frames,
+                    })
+                else:
+                    normal_segments.append({
+                        "run_id": run_id,
+                        "start_ts": start_ts,
+                        "end_ts": prev_ts,
+                        "duration_s": max(dur, 0.05),
+                        "frames": ep_frames,
+                    })
+                curr_label = r_label
+                curr_subtype = r_subtype
+                start_ts = r_ts
+                prev_ts = r_ts
+                ep_frames = [r]
+
+        dur = prev_ts - start_ts
+        if curr_label != "Normal":
+            episodes.append({
+                "run_id": run_id,
+                "attack_type": curr_label,
+                "subtype": curr_subtype,
+                "start_ts": start_ts,
+                "end_ts": prev_ts,
+                "duration_s": max(dur, 0.05),
+                "frames": ep_frames,
+            })
+        else:
+            normal_segments.append({
+                "run_id": run_id,
+                "start_ts": start_ts,
+                "end_ts": prev_ts,
+                "duration_s": max(dur, 0.05),
+                "frames": ep_frames,
+            })
+
+    # Evaluate each attack episode through fast path
+    total_episodes = len(episodes)
+    detected_episodes = 0
+    per_attack_episodes: Dict[str, Dict[str, Any]] = collections.defaultdict(lambda: {"total": 0, "detected": 0, "ttd_list": []})
+    ttd_list_all: List[float] = []
+
+    for ep in episodes:
+        atk_type = ep["attack_type"]
+        sub = ep["subtype"] or atk_type
+        per_attack_episodes[sub]["total"] += 1
+
+        rule_engine = CANRuleEngine(cfg=cfg)
+        physics_engine = PhysicsEngine(cfg=cfg)
+        risk_engine = RiskEngine(cfg=cfg)
+        failsafe = FailSafeManager(cfg=cfg)
+        ai_ctx = AIContext(available=True, anomaly=0.05, attack_prob=0.05, t=0.0)
+
+        ep_detected = False
+        first_detect_time: Optional[float] = None
+
+        for r in ep["frames"]:
+            raw_data = bytes.fromhex(r["data"]) if isinstance(r["data"], str) else bytes(r["data"])
+            frame = make_frame(
+                timestamp=float(r["ts"]),
+                arb_id=int(r["arb_id"]),
+                data=raw_data,
+                label=str(r.get("label", "Normal")),
+                subtype=str(r.get("subtype", "")),
+            )
+
+            if not failsafe.gate(frame, now=frame.timestamp):
+                fwd = False
+                lvl = RiskLevel.HIGH
+            else:
+                rule_evs = rule_engine.evaluate(frame)
+                try:
+                    dec = decode(frame.arb_id, frame.data)
+                except Exception:
+                    dec = None
+                phys_evs = physics_engine.check(frame, dec)
+                dec_obj = risk_engine.fuse_can(frame, rule_evs + phys_evs, ai_ctx=ai_ctx, now=frame.timestamp)
+                fwd, _ = failsafe.enforce(dec_obj, frame, now=frame.timestamp)
+                lvl = dec_obj.level
+
+            if fwd:
+                rule_engine.commit(frame)
+                try:
+                    dec = decode(frame.arb_id, frame.data)
+                    physics_engine.update(frame, dec)
+                except Exception:
+                    pass
+
+            is_blocked = (not fwd) or (lvl >= RiskLevel.HIGH)
+            if is_blocked and not ep_detected:
+                ep_detected = True
+                first_detect_time = frame.timestamp
+                break
+
+        if ep_detected:
+            detected_episodes += 1
+            per_attack_episodes[sub]["detected"] += 1
+            ttd = max(0.001, (first_detect_time - ep["start_ts"])) if first_detect_time else 0.001
+            per_attack_episodes[sub]["ttd_list"].append(ttd)
+            ttd_list_all.append(ttd)
+
+    # Evaluate normal segments for false alarms and normal-only FPR
+    total_normal_sec = sum(seg["duration_s"] for seg in normal_segments)
+    total_normal_hours = total_normal_sec / 3600.0
+    total_normal_frames = sum(len(seg["frames"]) for seg in normal_segments)
+    total_normal_windows = max(1, total_normal_frames // 16)
+
+    normal_false_alarm_events = 0
+    normal_false_alarm_windows = 0
+
+    for seg in normal_segments:
+        rule_engine = CANRuleEngine(cfg=cfg)
+        physics_engine = PhysicsEngine(cfg=cfg)
+        risk_engine = RiskEngine(cfg=cfg)
+        failsafe = FailSafeManager(cfg=cfg)
+        ai_ctx = AIContext(available=True, anomaly=0.02, attack_prob=0.02, t=0.0)
+
+        seg_has_fa = False
+        window_buf = []
+
+        for r in seg["frames"]:
+            raw_data = bytes.fromhex(r["data"]) if isinstance(r["data"], str) else bytes(r["data"])
+            frame = make_frame(
+                timestamp=float(r["ts"]),
+                arb_id=int(r["arb_id"]),
+                data=raw_data,
+                label="Normal",
+                subtype="",
+            )
+            window_buf.append(frame)
+
+            if not failsafe.gate(frame, now=frame.timestamp):
+                fwd = False
+                lvl = RiskLevel.HIGH
+            else:
+                rule_evs = rule_engine.evaluate(frame)
+                try:
+                    dec = decode(frame.arb_id, frame.data)
+                except Exception:
+                    dec = None
+                phys_evs = physics_engine.check(frame, dec)
+                dec_obj = risk_engine.fuse_can(frame, rule_evs + phys_evs, ai_ctx=ai_ctx, now=frame.timestamp)
+                fwd, _ = failsafe.enforce(dec_obj, frame, now=frame.timestamp)
+                lvl = dec_obj.level
+
+            if fwd:
+                rule_engine.commit(frame)
+                try:
+                    dec = decode(frame.arb_id, frame.data)
+                    physics_engine.update(frame, dec)
+                except Exception:
+                    pass
+
+            is_blocked = (not fwd) or (lvl >= RiskLevel.HIGH)
+            if is_blocked and not seg_has_fa:
+                seg_has_fa = True
+                normal_false_alarm_events += 1
+
+            if len(window_buf) >= 16:
+                if is_blocked:
+                    normal_false_alarm_windows += 1
+                window_buf = []
+
+    ep_recall = detected_episodes / max(total_episodes, 1)
+    mean_ttd_ms = float(np.mean(ttd_list_all) * 1000.0) if ttd_list_all else 0.0
+    p95_ttd_ms = float(np.percentile(ttd_list_all, 95) * 1000.0) if ttd_list_all else 0.0
+    fa_per_hour = float(normal_false_alarm_events / max(total_normal_hours, 1e-4))
+    normal_window_fpr = float(normal_false_alarm_windows / max(total_normal_windows, 1))
+
+    per_attack_out = {}
+    for atk, data in per_attack_episodes.items():
+        rec = data["detected"] / max(data["total"], 1)
+        m_ttd = float(np.mean(data["ttd_list"]) * 1000.0) if data["ttd_list"] else 0.0
+        per_attack_out[atk] = {
+            "total_episodes": data["total"],
+            "detected_episodes": data["detected"],
+            "recall": round(rec, 4),
+            "mean_ttd_ms": round(m_ttd, 2),
+        }
+
+    return {
+        "total_attack_episodes": total_episodes,
+        "detected_attack_episodes": detected_episodes,
+        "episode_recall": round(ep_recall, 4),
+        "mean_time_to_detect_ms": round(mean_ttd_ms, 2),
+        "p95_time_to_detect_ms": round(p95_ttd_ms, 2),
+        "per_attack_episodes": per_attack_out,
+        "normal_driving": {
+            "total_normal_seconds": round(total_normal_sec, 2),
+            "total_normal_hours": round(total_normal_hours, 4),
+            "total_normal_windows": total_normal_windows,
+            "false_alarms": normal_false_alarm_events,
+            "false_alarms_per_hour": round(fa_per_hour, 3),
+            "normal_window_fpr": round(normal_window_fpr, 4),
+            "normal_window_fpr_pct": round(normal_window_fpr * 100.0, 2),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. Frame-Level Fast-Path Replay Evaluation
 # ---------------------------------------------------------------------------
 
 def evaluate_frame_level(
@@ -866,7 +1198,7 @@ def run_evaluation(cfg: Optional[Any] = None) -> Dict[str, Any]:
 
     logger.info("Total windows: %d. Held-out test windows: %d across %d test runs.", len(y), int(np.sum(test_mask)), len(test_runs))
 
-    # 1. Window-level model evaluation
+    # 1. Window-level model evaluation (with balanced test set and val-calibrated threshold)
     window_metrics = evaluate_window_models(
         X_stat=X_stat,
         X_seq=X_seq,
@@ -874,11 +1206,24 @@ def run_evaluation(cfg: Optional[Any] = None) -> Dict[str, Any]:
         test_mask=test_mask,
         output_models_dir=output_models_dir,
         output_figures_dir=output_figures_dir,
+        train_mask=train_mask,
     )
+
+    # 2. Event-level evaluation (one prediction per attack episode, false alarms per hour)
+    event_metrics = evaluate_event_level(
+        df_can=df_can,
+        test_runs=test_runs,
+        cfg=cfg,
+    )
+    window_metrics["event_level"] = event_metrics
+
+    with open(output_metrics_dir / "evaluation_event_metrics.json", "w", encoding="utf-8") as f:
+        json.dump(event_metrics, f, indent=2)
+
     with open(output_metrics_dir / "evaluation_window_metrics.json", "w", encoding="utf-8") as f:
         json.dump(window_metrics, f, indent=2)
 
-    # 2. Frame-level fast-path evaluation
+    # 3. Frame-level fast-path evaluation
     frame_metrics = evaluate_frame_level(
         df_can=df_can,
         test_runs=test_runs,
@@ -887,7 +1232,7 @@ def run_evaluation(cfg: Optional[Any] = None) -> Dict[str, Any]:
     with open(output_metrics_dir / "evaluation_frame_metrics.json", "w", encoding="utf-8") as f:
         json.dump(frame_metrics, f, indent=2)
 
-    # 3. Ablation study across 4 configs
+    # 4. Ablation study across 4 configs
     ablation_metrics = run_ablation_study(
         df_can=df_can,
         test_runs=test_runs,
@@ -897,9 +1242,39 @@ def run_evaluation(cfg: Optional[Any] = None) -> Dict[str, Any]:
     with open(output_metrics_dir / "ablation_metrics.json", "w", encoding="utf-8") as f:
         json.dump(ablation_metrics, f, indent=2)
 
+    # Print Executive Summary Tables
+    print("\n" + "=" * 80)
+    print("      CAVSHIELD REBUILT EVALUATION: BALANCED & EVENT-LEVEL RESULTS")
+    print("=" * 80)
+    bal = window_metrics.get("balanced_classifier", {})
+    print(f"BALANCED WINDOW TEST SET (N={bal.get('total_windows', 0):,} windows, {bal.get('windows_per_class', 0)} per class):")
+    print(f"Accuracy: {bal.get('accuracy', 0)*100:.2f}% | Macro Prec: {bal.get('macro_precision', 0):.4f} | Macro Rec: {bal.get('macro_recall', 0):.4f} | Macro F1: {bal.get('macro_f1', 0):.4f}")
+    print("-" * 80)
+    print(f"{'Class':<15} {'Precision':<12} {'Recall':<12} {'F1-Score':<12} {'FPR':<12} {'Support':<10}")
+    print("-" * 80)
+    for cname, pcm in bal.get("per_class", {}).items():
+        print(f"{cname:<15} {pcm.get('precision', 0):<12.4f} {pcm.get('recall', 0):<12.4f} {pcm.get('f1', 0):<12.4f} {pcm.get('fpr', 0):<12.4f} {pcm.get('support', 0):<10}")
+
+    print("\n" + "-" * 80)
+    print(f"EVENT-LEVEL METRICS ({event_metrics.get('total_attack_episodes', 0)} Attack Episodes Evaluated):")
+    print(f"Episode Recall:             {event_metrics.get('episode_recall', 0)*100:.2f}% ({event_metrics.get('detected_attack_episodes', 0)} / {event_metrics.get('total_attack_episodes', 0)} episodes detected)")
+    print(f"Mean Time-to-Detect (TTD):  {event_metrics.get('mean_time_to_detect_ms', 0):.2f} ms (p95: {event_metrics.get('p95_time_to_detect_ms', 0):.2f} ms)")
+    norm_d = event_metrics.get("normal_driving", {})
+    print(f"Normal Driving Hours:       {norm_d.get('total_normal_hours', 0):.3f} h ({norm_d.get('total_normal_seconds', 0):.1f} s)")
+    print(f"Normal False Alarms / Hour: {norm_d.get('false_alarms_per_hour', 0):.2f} false alarms/h ({norm_d.get('false_alarms', 0)} events total)")
+    print(f"Normal Window FPR:          {norm_d.get('normal_window_fpr_pct', 0):.3f}% ({norm_d.get('normal_window_fpr', 0):.5f})")
+
+    val_t = window_metrics.get("validation_threshold", {})
+    print("\n" + "-" * 80)
+    print("THRESHOLD VALIDATION AUDIT (IsolationForest):")
+    print(f"Training Anomaly Threshold:   {val_t.get('raw_threshold_train', 0):.5f} -> Test FPR: {val_t.get('old_test_fpr', 0)*100:.3f}%")
+    print(f"Validation-Frozen Threshold:  {val_t.get('val_threshold_frozen', 0):.5f} -> Test FPR: {val_t.get('new_test_fpr', 0)*100:.3f}%")
+    print("=" * 80 + "\n")
+
     logger.info("Evaluation complete! All JSON metrics and PNG figures generated.")
     return {
         "window": window_metrics,
+        "event": event_metrics,
         "frame": frame_metrics,
         "ablation": ablation_metrics,
     }

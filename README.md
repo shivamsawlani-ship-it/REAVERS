@@ -101,7 +101,34 @@ flowchart TD
 
 ---
 
-## 5. Windows Installation
+## 5. Threat Model & Operational Boundary
+
+> [!NOTE]
+> **Honest Operational Boundary**: CAVShield is an **inline automotive gateway** operating at the CAN bus and V2X message layer. It does **NOT** observe physical RF signals, Bluetooth packets, cellular baseband frames, or physical OBD-II pin voltages. The **Assumed Entry Point** associated with each simulated attack is an automotive threat-modeling assumption, not an empirical radio detection result. See [THREAT_MODEL.md](THREAT_MODEL.md) for full architectural specifications.
+
+### Attack Threat Matrix & Operational Response
+
+| Attack Scenario | Assumed Entry Point (Simulated Scenario) | What CAVShield Observes at Gateway | CAVShield Enforcement & Mitigation Response |
+|---|---|---|---|
+| **`spoof_brake`** | Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular) | Hostile 0x200 `BRAKE_COMMAND` (7.0 m/s²) arriving while brake pedal = 0% and no radar obstacle | Inline gateway drops frame in < 0.15 ms; digital twin cruise speed is preserved. |
+| **`spoof_accel`** | Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular) | Hostile 0x201 `ACCEL_COMMAND` (+4.5 m/s²) arriving without accelerator pedal actuation | Inline gateway drops frame; uncommanded acceleration is blocked. |
+| **`spoof_speed`** | Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular) | 0x101 `VEHICLE_SPEED` reporting 125 km/h while independent wheel encoders report 72 km/h | Gateway rejects corrupt telemetry; failsafe enters DEGRADED sensor fallback mode. |
+| **`spoof_rpm`** | Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular) | 0x100 `ENGINE_RPM` reporting 7,000 RPM while vehicle speed and gear ratio dictate ~2,760 RPM | Physics invariant check rejects frame; alerts dashboard. |
+| **`spoof_gear`** | Compromised infotainment (Bluetooth/Wi-Fi) or telematics (cellular) | 0x104 `GEAR_POSITION` commanding Reverse (gear=1) while vehicle speed > 5 km/h | Kinematic interlock check drops transmission command; prevents mechanical damage. |
+| **`flood`** | Malicious OBD-II device | High-rate bus saturation (700+ Hz) on high-priority IDs (0x000, 0x0A0) | Token-bucket rate limiter sheds flood frames in 2.2 µs; prevents bus starvation. |
+| **`fuzz`** | Malicious OBD-II device | High-rate random arbitration IDs and non-conforming 8-byte bit patterns | DBC whitelist drops unregistered IDs; checksum validation drops corrupted frames. |
+| **`replay`** | Recorded traffic replayed via a compromised node | Stale alive counters, static payloads, and out-of-schedule timing matching past buffers | Sequential alive counter check and inter-arrival timing checks reject replayed frames. |
+| **`v2x_phantom`** | Malicious V2X transmitter / compromised on-board V2X unit | Validly signed BSM hazard broadcast claiming road obstacle 40 m ahead in ego lane | Multi-sensor cross-check reveals radar/LiDAR clear line-of-sight; phantom hazard rejected. |
+| **`v2x_fake_ebrake`**| Malicious V2X transmitter / compromised on-board V2X unit | Unauthenticated BSM message claiming emergency deceleration (9 m/s²) with invalid signature | Cryptographic verification fails; message dropped before reaching ADAS planner. |
+| **`v2x_gps`** | Spoofed position broadcast | Discontinuous kinematic jump (> 150 m in 0.1 s) inconsistent with vehicle velocity limits | Kinematic plausibility validator rejects beacon; prevents phantom tracking. |
+
+### System Security Assumptions
+1. **Trusted Gateway Root of Trust**: Gateway hardware (e.g., NXP S32G / ARM Cortex-R52) and its microkernel enforce secure boot and cryptographic memory isolation.
+2. **Independent Sensor Channels**: Wheel speed encoders, 6-DoF IMU, and forward Radar/LiDAR communicate over physically isolated point-to-point buses independent of the untrusted CAN bus segments.
+
+---
+
+## 6. Windows Installation
 
 CAVShield is designed to run 100% locally on a Windows laptop without external hardware or GPU dependencies.
 
@@ -297,18 +324,23 @@ pytest tests/ -v
 
 ---
 
-## 14. Limitations
+## 14. Limitations & Out-of-Scope Security Boundaries
 
-In the interest of rigorous engineering transparency, we explicitly document current system limitations:
-1. **Synthetic & Offline Vehicle Plant**: The digital twin implements simplified 2-DOF longitudinal and lateral kinematics; it is not a multi-body vehicle dynamics simulator (such as IPG CarMaker or dSPACE ASM).
-2. **Simulated Sensor Tracks**: Radar, LiDAR, and Camera perception data are simulated via bounding boxes with Gaussian spatial noise rather than processing raw point clouds or camera image streams.
-3. **Software Virtual Bus**: Testing is performed using `python-can` virtual memory channels rather than physical CAN transceivers and microcontrollers (e.g., Infineon AURIX TC397 or Vector VN1630).
-4. **Symmetric HMAC vs Public Key Infrastructure**: V2X trust tokens utilize shared-secret HMAC-SHA256 authentication for low-latency simulation rather than full IEEE 1609.2 / ETSI C-ITS elliptic curve certificates (ECDSA P-256).
+In the interest of rigorous engineering transparency, we explicitly document current system limitations and out-of-scope threat vectors:
+1. **Physical Sensor Spoofing & Blinding**: Laser dazzling/blinding of optical LiDAR lenses, acoustic jamming of ultrasonic sensors, or RF ghost-target radar spoofing are outside the gateway boundary. CAVShield assumes that primary physical sensors deliver unjammed telemetry to the gateway.
+2. **GPS RF Constellation Spoofing**: Radio-frequency spoofing of civilian GPS L1/L5 signals using SDRs is out of scope. CAVShield detects kinematic position jumps (> 150 m) in V2X messages, but does not inspect RF signal arrival angle or carrier-to-noise ratios.
+3. **Compromised Gateway Hardware**: If the gateway microcontroller or HSM itself suffers firmware corruption or ring-0 exploitation, gateway enforcement cannot be guaranteed.
+4. **Synthetic & Offline Vehicle Plant**: The digital twin implements simplified 2-DOF longitudinal and lateral kinematics; it is not a multi-body vehicle dynamics simulator (such as IPG CarMaker or dSPACE ASM).
+5. **Software Virtual Bus**: Testing is performed using `python-can` virtual memory channels rather than physical CAN transceivers and microcontrollers (e.g., Infineon AURIX TC397 or Vector VN1630).
+6. **Symmetric HMAC vs Public Key Infrastructure**: V2X trust tokens utilize shared-secret HMAC-SHA256 authentication for low-latency simulation rather than full IEEE 1609.2 / ETSI C-ITS elliptic curve certificates (ECDSA P-256).
 
 ---
 
 ## 15. Future Improvements & Roadmap
 
+- **Multi-Modal Perception Layer Plausibility**: Implement raw sensor cross-validation (radar doppler velocity vs optical flow vs wheel odometry) to detect physical sensor spoofing at the perception layer.
+- **Microkernel Formal Verification**: Port the gateway fast-path logic to a formally verified microkernel (e.g., seL4) running on dual-core lockstep hardware to mitigate gateway firmware compromise.
+- **GNSS RF Plausibility Verification**: Integrate dual-antenna GNSS carrier phase continuity verification and dual-band GPS anti-spoofing checks.
 - **AUTOSAR SecOC Integration**: Implement standard AUTOSAR Secure Onboard Communication (SecOC) crypto profiles (AES-128 CMAC and Freshness Value Managers).
 - **Hardware-in-the-Loop (HIL) Testbed**: Deploy CAVShield gateway onto an embedded NXP S32G automotive gateway processor connected to real physical CAN-FD and Automotive Ethernet buses.
 - **Federated Anomaly Learning**: Enable privacy-preserving federated model fine-tuning across vehicle fleets to adapt to novel edge-case driving maneuvers without centralizing raw CAN telemetry.

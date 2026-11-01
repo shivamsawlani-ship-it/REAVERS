@@ -431,6 +431,7 @@ def create_bus(cfg: Any = None) -> Any:
             interface=interface,
             channel=channel,
             receive_own_messages=False,
+            preserve_timestamps=True,
         )
     except Exception:
         return InMemoryBus(channel=str(channel))
@@ -517,8 +518,11 @@ class ECUSimulator:
         self._next_send_time: Dict[int, float] = {}
         self.reset()
 
+        self.world_stalls: int = 0
+
     def reset(self) -> None:
         """Reset alive counters and initialize random phase schedules."""
+        self.world_stalls = 0
         self._counters = {arb_id: 0 for arb_id in KNOWN_IDS}
         self._next_send_time.clear()
         for arb_id, mdef in DBC.items():
@@ -553,8 +557,11 @@ class ECUSimulator:
 
                 # Resync instead of bursting if the loop falls behind
                 if (now - t_send) > 2.0 * period:
+                    self.world_stalls += 1
+                    t_frame = now
                     self._next_send_time[arb_id] = now + period + jitter
                 else:
+                    t_frame = t_send
                     self._next_send_time[arb_id] = t_send + period + jitter
 
                 # Build signals from vehicle_state
@@ -563,7 +570,7 @@ class ECUSimulator:
                 self._counters[arb_id] = (counter + 1) % 16
 
                 payload = encode(arb_id, signals, counter)
-                frames.append(make_frame(t_send, arb_id, payload, label="Normal", subtype=""))
+                frames.append(make_frame(t_frame, arb_id, payload, label="Normal", subtype=""))
 
         return frames
 

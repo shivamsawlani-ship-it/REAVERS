@@ -88,6 +88,8 @@ class CANRuleEngine:
 
         # Rate tracking deques: updated per frame on evaluate() to monitor live bus rates
         self._rate_deques: Dict[int, Deque[float]] = collections.defaultdict(collections.deque)
+        self._rate_high_start: Dict[int, float] = {}
+        self._recent_timing_violations: Dict[int, float] = {}
 
         # Incoming frame history for resync tracking: arb_id -> deque of (ts, counter, chk_ok)
         self._incoming_history: Dict[int, Deque[Tuple[float, int, bool]]] = collections.defaultdict(
@@ -100,6 +102,8 @@ class CANRuleEngine:
         self._last_accepted_counter.clear()
         self._seen_payload_hashes.clear()
         self._rate_deques.clear()
+        self._rate_high_start.clear()
+        self._recent_timing_violations.clear()
         self._incoming_history.clear()
 
     def force_resync(self, arb_id: int) -> None:
@@ -108,6 +112,8 @@ class CANRuleEngine:
         self._last_accepted_counter.pop(arb_id, None)
         self._incoming_history[arb_id].clear()
         self._rate_deques[arb_id].clear()
+        self._rate_high_start.pop(arb_id, None)
+        self._recent_timing_violations.pop(arb_id, None)
 
     def stream_rate_ratio(self, arb_id: int) -> float:
         """Return the ratio of current observed stream rate to nominal rate."""
@@ -122,7 +128,7 @@ class CANRuleEngine:
             return current_rate_hz / nominal_hz
         return current_rate_hz / 10.0  # nominal default for unknown IDs
 
-    def evaluate(self, frame: CANFrame) -> List[Evidence]:
+    def evaluate(self, frame: CANFrame, backlog: int = 0) -> List[Evidence]:
         """Evaluate deterministic rules against a single incoming frame.
 
         Does not mutate committed state. Updates stream rate counters only.
@@ -131,6 +137,8 @@ class CANRuleEngine:
         ----------
         frame : CANFrame
             Incoming CAN frame.
+        backlog : int
+            Current pipeline queue backlog length (used for smoothed flood estimation).
 
         Returns
         -------
@@ -142,12 +150,19 @@ class CANRuleEngine:
         arb_id = frame.arb_id
         data = frame.data
 
-        # 1. Update live rate tracking deque
+        # 1. Update live rate tracking deque with burst deduplication & clock jump protection
         q = self._rate_deques[arb_id]
         cutoff = now - self.rate_window_s
-        while q and q[0] < cutoff:
+
+        # Purge entries older than cutoff or contaminated by clock skew (e.g. non-monotonic jumps)
+        while q and (q[0] < cutoff or q[0] > (now + 0.5)):
             q.popleft()
-        q.append(now)
+
+        # Frames sharing nearly the same timestamp (within 0.2 ms) belong to a single burst
+        is_same_burst = bool(q and abs(now - q[-1]) <= 0.0002)
+        if not is_same_burst:
+            q.append(now)
+
         current_rate_hz = len(q) / self.rate_window_s
 
         # -------------------------------------------------------------------
@@ -254,10 +269,18 @@ class CANRuleEngine:
         # -------------------------------------------------------------------
         # Rule 5: TIMING (Inter-arrival < 0.45 x nominal period since last ACCEPTED)
         # -------------------------------------------------------------------
-        if is_known and arb_id in self._last_accepted_ts:
+        has_timing_violation = False
+        if is_known:
             period_s = DBC[arb_id].period_s
-            dt = now - self._last_accepted_ts[arb_id]
-            if dt < (0.45 * period_s):
+            dt = None
+            if arb_id in self._last_accepted_ts:
+                dt = now - self._last_accepted_ts[arb_id]
+            elif len(self._incoming_history[arb_id]) >= 2:
+                dt = now - self._incoming_history[arb_id][-2][0]
+
+            if dt is not None and dt < (0.45 * period_s):
+                has_timing_violation = True
+                self._recent_timing_violations[arb_id] = now
                 evidence_list.append(Evidence(
                     source="rule",
                     name="TIMING",
@@ -270,32 +293,68 @@ class CANRuleEngine:
                 ))
 
         # -------------------------------------------------------------------
-        # Rule 6: RATE_FLOOD (Stream rate > 2.5 x nominal with >= 6 frames)
+        # Rule 6: RATE_FLOOD (Fixed window rate with sustained duration & off-schedule check)
         # -------------------------------------------------------------------
+        recent_timing_violation = (now - self._recent_timing_violations.get(arb_id, -100.0)) <= 0.50
+        timing_violation_active = has_timing_violation or recent_timing_violation
+
         if is_known:
             nominal_hz = 1.0 / DBC[arb_id].period_s
             ratio = current_rate_hz / nominal_hz
-            if len(q) >= 6 and ratio > 2.5:
+            is_high_rate = (len(q) >= 6 and ratio > 2.5)
+
+            if is_high_rate:
+                if arb_id not in self._rate_high_start:
+                    self._rate_high_start[arb_id] = now
+                high_duration = now - self._rate_high_start[arb_id]
+            else:
+                self._rate_high_start.pop(arb_id, None)
+                high_duration = 0.0
+
+            # Requirements:
+            # - Flood needs a minimum duration (e.g. 0.3 s above 2.5x)
+            # - Known-ID flood must also show off-schedule frames (timing violations), not just high count
+            # - If backlog exists, never raise flood verdict unless sustained over 1 s
+            if backlog > 0:
+                duration_ok = (high_duration >= 1.0)
+            else:
+                duration_ok = (high_duration >= 0.30) or (len(q) >= 20 and ratio >= 3.0)
+
+            if is_high_rate and duration_ok and timing_violation_active:
                 evidence_list.append(Evidence(
                     source="rule",
                     name="RATE_FLOOD",
                     severity=self.rate_anomaly_weight,
                     detail=(
                         f"Rate flood on 0x{arb_id:03X}: {current_rate_hz:.1f} Hz "
-                        f"({ratio:.1f}x nominal {nominal_hz:.1f} Hz over {self.rate_window_s:.2f}s)"
+                        f"({ratio:.1f}x nominal {nominal_hz:.1f} Hz sustained {high_duration:.2f}s)"
                     ),
                     hint="Flooding",
                 ))
         else:
             # Unknown ID stream rate check: above 40 Hz
-            if len(q) >= 6 and current_rate_hz > 40.0:
+            is_high_rate = (len(q) >= 6 and current_rate_hz > 40.0)
+            if is_high_rate:
+                if arb_id not in self._rate_high_start:
+                    self._rate_high_start[arb_id] = now
+                high_duration = now - self._rate_high_start[arb_id]
+            else:
+                self._rate_high_start.pop(arb_id, None)
+                high_duration = 0.0
+
+            if backlog > 0:
+                duration_ok = (high_duration >= 1.0)
+            else:
+                duration_ok = (high_duration >= 0.30) or (len(q) >= 20 and current_rate_hz >= 60.0)
+
+            if is_high_rate and duration_ok:
                 evidence_list.append(Evidence(
                     source="rule",
                     name="RATE_FLOOD",
                     severity=self.rate_anomaly_weight,
                     detail=(
                         f"Flood on unknown ID 0x{arb_id:03X}: {current_rate_hz:.1f} Hz "
-                        f"exceeds 40 Hz threshold"
+                        f"exceeds 40 Hz threshold sustained {high_duration:.2f}s"
                     ),
                     hint="Flooding",
                 ))

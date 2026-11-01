@@ -1,0 +1,24 @@
+[
+  {
+    "scenario": "driver_panic_brake",
+    "passed": true,
+    "blocked_count": 0
+  },
+  {
+    "scenario": "legitimate_aeb",
+    "passed": true,
+    "aeb_command_seen": true,
+    "mode": "NORMAL"
+  },
+  {
+    "scenario": "acc_slowdown",
+    "passed": false,
+    "speed_reduced": true,
+    "incidents": 0
+  },
+  {
+    "scenario": "benign_bursts",
+    "passed": true,
+    "false_incidents": 0
+  }
+]

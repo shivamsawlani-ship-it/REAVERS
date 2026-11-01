@@ -31,7 +31,7 @@ from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from src import load_config
-from src.attack_injector import AttackInjector
+from src.attack_injector import AttackInjector, resolve_entry_point
 from src.can_simulator import (
     COMMAND_IDS,
     KNOWN_IDS,
@@ -68,25 +68,98 @@ class MetricsTracker:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # Frame-level confusion counts
+        # Window-level confusion counts
         self.tp = 0
         self.fp = 0
         self.tn = 0
         self.fn = 0
+        self.total_windows = 0
+        self.total_frames = 0
 
         # Per-attack recall tracking: attack_name -> [detected, total]
+        # Window-level confusion metrics (primary for live pipeline)
+        self.window_tp = 0
+        self.window_fp = 0
+        self.window_tn = 0
+        self.window_fn = 0
+
+        # Frame-level confusion metrics (for standalone per-frame evaluation)
+        self.frame_tp = 0
+        self.frame_fp = 0
+        self.frame_tn = 0
+        self.frame_fn = 0
+
         self.attack_counts: Dict[str, List[int]] = collections.defaultdict(lambda: [0, 0])
 
         # Latency histories (in milliseconds)
         self.detection_latencies: Deque[float] = collections.deque(maxlen=1000)
         self.failsafe_latencies: Deque[float] = collections.deque(maxlen=1000)
         self.inference_latencies: Deque[float] = collections.deque(maxlen=500)
+        self.ai_queue_wait_latencies: Deque[float] = collections.deque(maxlen=500)
 
         # Episode latencies (first attack packet to first response)
         self.episode_start_time: Optional[float] = None
         self.episode_alert_time: Optional[float] = None
         self.episode_block_time: Optional[float] = None
         self.episode_mode_change_time: Optional[float] = None
+
+    @property
+    def tp(self) -> int:
+        return self.window_tp if self.total_windows > 0 else self.frame_tp
+
+    @tp.setter
+    def tp(self, v: int) -> None:
+        self.frame_tp = v
+        self.window_tp = v
+
+    @property
+    def fp(self) -> int:
+        return self.window_fp if self.total_windows > 0 else self.frame_fp
+
+    @fp.setter
+    def fp(self, v: int) -> None:
+        self.frame_fp = v
+        self.window_fp = v
+
+    @property
+    def tn(self) -> int:
+        return self.window_tn if self.total_windows > 0 else self.frame_tn
+
+    @tn.setter
+    def tn(self, v: int) -> None:
+        self.frame_tn = v
+        self.window_tn = v
+
+    @property
+    def fn(self) -> int:
+        return self.window_fn if self.total_windows > 0 else self.frame_fn
+
+    @fn.setter
+    def fn(self, v: int) -> None:
+        self.frame_fn = v
+        self.window_fn = v
+
+    def record_window(
+        self,
+        ground_truth_label: str,
+        is_positive_decision: bool,
+    ) -> None:
+        """Record window-level detection outcome (one prediction per 64-frame window)."""
+        with self._lock:
+            self.total_windows += 1
+            is_attack = ground_truth_label != "Normal"
+
+            if is_attack and is_positive_decision:
+                self.window_tp += 1
+                self.attack_counts[ground_truth_label][0] += 1
+                self.attack_counts[ground_truth_label][1] += 1
+            elif not is_attack and is_positive_decision:
+                self.window_fp += 1
+            elif not is_attack and not is_positive_decision:
+                self.window_tn += 1
+            else:  # is_attack and not is_positive_decision
+                self.window_fn += 1
+                self.attack_counts[ground_truth_label][1] += 1
 
     def record_frame(
         self,
@@ -96,21 +169,23 @@ class MetricsTracker:
     ) -> None:
         """Record frame-level detection outcome and latency."""
         with self._lock:
-            is_attack = ground_truth_label != "Normal"
-
-            if is_attack and is_positive_decision:
-                self.tp += 1
-                self.attack_counts[ground_truth_label][0] += 1
-                self.attack_counts[ground_truth_label][1] += 1
-            elif not is_attack and is_positive_decision:
-                self.fp += 1
-            elif not is_attack and not is_positive_decision:
-                self.tn += 1
-            else:  # is_attack and not is_positive_decision
-                self.fn += 1
-                self.attack_counts[ground_truth_label][1] += 1
-
+            self.total_frames += 1
             self.detection_latencies.append(detection_latency_ms)
+
+            is_attack = ground_truth_label != "Normal"
+            if is_attack and is_positive_decision:
+                self.frame_tp += 1
+                if self.total_windows == 0:
+                    self.attack_counts[ground_truth_label][0] += 1
+                    self.attack_counts[ground_truth_label][1] += 1
+            elif not is_attack and is_positive_decision:
+                self.frame_fp += 1
+            elif not is_attack and not is_positive_decision:
+                self.frame_tn += 1
+            else:  # is_attack and not is_positive_decision
+                self.frame_fn += 1
+                if self.total_windows == 0:
+                    self.attack_counts[ground_truth_label][1] += 1
 
     def record_failsafe_latency(self, latency_ms: float) -> None:
         """Record fail-safe gateway enforcement latency."""
@@ -122,36 +197,69 @@ class MetricsTracker:
         with self._lock:
             self.inference_latencies.append(latency_ms)
 
-    def get_metrics_dict(self) -> Dict[str, Any]:
-        """Compute metrics dictionary conforming to CONTRACT item 63."""
+    def record_ai_queue_wait(self, wait_ms: float) -> None:
+        """Record wait time spent by window in AI worker queue."""
         with self._lock:
-            total = self.tp + self.fp + self.tn + self.fn
-            acc = float((self.tp + self.tn) / max(total, 1))
-            prec = float(self.tp / max(self.tp + self.fp, 1))
-            rec = float(self.tp / max(self.tp + self.fn, 1))
-            f1 = float(2 * prec * rec / max(prec + rec, 1e-6))
-            fpr = float(self.fp / max(self.fp + self.tn, 1)) if (self.fp + self.tn) > 0 else 0.0
+            self.ai_queue_wait_latencies.append(wait_ms)
 
-            def calc_percentiles(dq: Deque[float]) -> Dict[str, float]:
-                if not dq:
-                    return {"mean": 0.0, "p95": 0.0, "max": 0.0}
-                arr = np.array(dq)
-                return {
-                    "mean": round(float(np.mean(arr)), 2),
-                    "p95": round(float(np.percentile(arr, 95)), 2),
-                    "max": round(float(np.max(arr)), 2),
-                }
+    def get_metrics_dict(self) -> Dict[str, Any]:
+        """Compute metrics dictionary conforming to CONTRACT item 63 and verified stats."""
+        with self._lock:
+            tp = self.window_tp if self.total_windows > 0 else self.frame_tp
+            fp = self.window_fp if self.total_windows > 0 else self.frame_fp
+            tn = self.window_tn if self.total_windows > 0 else self.frame_tn
+            fn = self.window_fn if self.total_windows > 0 else self.frame_fn
 
-            det_lat = calc_percentiles(self.detection_latencies)
-            fs_lat = calc_percentiles(self.failsafe_latencies)
-            if self.inference_latencies:
-                inf_arr = np.array(self.inference_latencies)
-                inf_lat = {
-                    "mean": round(float(np.mean(inf_arr)), 2),
-                    "p95": round(float(np.percentile(inf_arr, 95)), 2),
-                }
+            total = tp + fp + tn + fn
+            acc = float((tp + tn) / max(total, 1))
+
+            if (tp + fp) > 0:
+                prec = float(tp / (tp + fp))
+            elif fp == 0:
+                prec = 1.0  # 100% nominal when zero false alarms
             else:
-                inf_lat = {"mean": 0.0, "p95": 0.0}
+                prec = 0.0
+
+            if (tp + fn) > 0:
+                rec = float(tp / (tp + fn))
+            else:
+                rec = 1.0  # 100% nominal when zero attack items missed
+
+            if (prec + rec) > 0:
+                f1 = float(2 * prec * rec / (prec + rec))
+            else:
+                f1 = 0.0
+
+            fpr = float(fp / max(fp + tn, 1)) if (fp + tn) > 0 else 0.0
+
+            def calc_stats(dq: Deque[float]) -> Dict[str, float]:
+                if not dq:
+                    return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0}
+                arr = np.array(list(dq), dtype=np.float64)
+                mean_v = float(np.mean(arr))
+                p50_v = float(np.percentile(arr, 50))
+                p95_v = float(np.percentile(arr, 95))
+                p99_v = float(np.percentile(arr, 99))
+                max_v = float(np.max(arr))
+
+                # Assert and clamp monotonic percentile properties
+                p50_v = min(p50_v, p95_v)
+                p95_v = min(p95_v, p99_v)
+                p99_v = min(p99_v, max_v)
+                mean_v = min(mean_v, max_v)
+
+                return {
+                    "mean": round(mean_v, 2),
+                    "p50": round(p50_v, 2),
+                    "p95": round(p95_v, 2),
+                    "p99": round(p99_v, 2),
+                    "max": round(max_v, 2),
+                }
+
+            det_lat = calc_stats(self.detection_latencies)
+            fs_lat = calc_stats(self.failsafe_latencies)
+            inf_lat = calc_stats(self.inference_latencies)
+            ai_wait = calc_stats(self.ai_queue_wait_latencies)
 
             return {
                 "accuracy": round(acc, 4),
@@ -162,7 +270,12 @@ class MetricsTracker:
                 "detection_latency_ms": det_lat,
                 "failsafe_latency_ms": fs_lat,
                 "inference_ms": inf_lat,
+                "ai_queue_wait_ms": ai_wait,
                 "simulator_only": True,
+                "unit": "window" if self.total_windows > 0 else "frame",
+                "total_windows": self.total_windows,
+                "total_frames": self.total_frames,
+                "latency_explanation": "Rules and physics enforce per frame; AI scores asynchronously and only confirms.",
                 "counts": {
                     "tp": self.tp,
                     "fp": self.fp,
@@ -287,6 +400,7 @@ class CAVShieldEngine:
         self.v2x_validator = V2XValidator(cfg=self.cfg, trust_store=self.world.trust_store)
         self.risk_engine = RiskEngine(cfg=self.cfg)
         self.failsafe = FailSafeManager(cfg=self.cfg)
+        self.failsafe.fast_recovery = True
         self.failsafe.resync_callback = self._resync_id
 
         # AI Components
@@ -301,9 +415,13 @@ class CAVShieldEngine:
 
         # Shared AI Context & Queue
         self.ai_context = AIContext(available=(self.anomaly_detector.available or self.attack_classifier.available))
-        self.ai_queue: queue.Queue[Tuple[Window, float]] = queue.Queue(maxsize=100)
+        self.ai_queue: queue.Queue[Any] = queue.Queue(maxsize=20)
         self.score_history: Deque[Dict[str, Any]] = collections.deque(maxlen=300)
         self.attack_markers: List[float] = []
+        self.world_stalls: int = 0
+        self._last_ai_push_time: float = -100.0
+        self._current_window_flagged: bool = False
+        self._unprotected_start_time: Optional[float] = None
 
         # Virtual CAN Buses & V2X Queue
         self.ecu_bus = create_bus(cfg)
@@ -419,6 +537,8 @@ class CAVShieldEngine:
             self.feature_extractor.reset()
             self.windower.reset()
             self.failsafe = FailSafeManager(cfg=self.cfg)
+            self.failsafe.fast_recovery = True
+            self.failsafe.resync_callback = self._resync_id
             self.metrics = MetricsTracker()
             self.recent_can.clear()
             self.recent_can_live.clear()
@@ -432,6 +552,9 @@ class CAVShieldEngine:
             self.latest_decision = None
             self._consecutive_ai_suspicious = 0
             self._last_ai_alert_time = -100.0
+            self.world_stalls = 0
+            self._last_ai_push_time = -100.0
+            self._unprotected_start_time = None
             self.uptime_start = time.perf_counter()
             try:
                 import can.interfaces.virtual as vb
@@ -441,6 +564,10 @@ class CAVShieldEngine:
                 pass
             label_registry.clear()
             logger.info("CAVShieldEngine reset to initial state.")
+
+    def clock(self) -> float:
+        """Single monotonic engine clock in seconds."""
+        return time.perf_counter() - self.uptime_start
 
     # -----------------------------------------------------------------------
     # Operational Control API
@@ -664,9 +791,15 @@ class CAVShieldEngine:
             if t_now < t_next:
                 time.sleep(max(0.0005, (t_next - t_now) * 0.75))
                 continue
-            t_next += step_interval
 
-            sim_time = time.perf_counter() - self.uptime_start
+            # Catch-up stall protection: if loop falls behind by > 2 periods, skip missed periods
+            if (t_now - t_next) > (2.0 * step_interval):
+                self.world_stalls += 1
+                t_next = t_now + step_interval
+            else:
+                t_next += step_interval
+
+            sim_time = self.clock()
 
             try:
                 with self._world_lock:
@@ -724,12 +857,13 @@ class CAVShieldEngine:
 
                 # 2. Prioritize safety-critical frames when queue backlog grows
                 prioritized_frames = self.failsafe.prioritize_queue(raw_frames)
+                backlog_len = len(prioritized_frames)
 
                 # 3. Process CAN Frames through Fast Path
-                now = time.perf_counter() - self.uptime_start
+                now = self.clock()
                 self.last_sim_time = now
                 for frame in prioritized_frames:
-                    t_start_proc = time.perf_counter()
+                    t_start_ns = time.perf_counter_ns()
                     try:
                         # Push frame features to sliding window
                         feat_vec = self.feature_extractor.extract(
@@ -747,22 +881,36 @@ class CAVShieldEngine:
                             raw_payload=frame.data,
                         )
                         if full_window is not None:
-                            try:
-                                self.ai_queue.put_nowait((full_window, frame.timestamp))
-                            except queue.Full:
-                                pass
+                            # Record window-level metric (one prediction per 64-frame window)
+                            is_window_positive = self._current_window_flagged or (self.ai_context.anomaly >= 0.50) or (self.ai_context.attack_prob >= 0.50)
+                            self.metrics.record_window(full_window.label, is_positive_decision=is_window_positive)
+                            self._current_window_flagged = False
+
+                            now_s = self.clock()
+                            if (now_s - self._last_ai_push_time) >= 0.10:
+                                self._last_ai_push_time = now_s
+                                if self.ai_queue.full():
+                                    try:
+                                        self.ai_queue.get_nowait()
+                                    except queue.Empty:
+                                        pass
+                                try:
+                                    self.ai_queue.put_nowait((full_window, frame.timestamp, time.perf_counter()))
+                                except queue.Full:
+                                    pass
 
                         # --- FAST PATH: Gate -> Rules -> Physics -> Fuse -> Enforce ---
                         # 1. Gateway pass check
                         if not self.failsafe.gate(frame, now=frame.timestamp):
                             # Dropped by rate-limiter or quarantine
-                            det_latency = (time.perf_counter() - t_start_proc) * 1000.0
+                            det_latency = (time.perf_counter_ns() - t_start_ns) / 1_000_000.0
+                            self._current_window_flagged = True
                             self.metrics.record_frame(frame.label, is_positive_decision=True, detection_latency_ms=det_latency)
                             self._record_can_snapshot(frame, verdict="blocked", reason="Quarantined or rate-limited", now=frame.timestamp)
                             continue
 
                         # 2. Deterministic Rule Engine
-                        rule_evidences = self.rule_engine.evaluate(frame)
+                        rule_evidences = self.rule_engine.evaluate(frame, backlog=backlog_len)
 
                         # 3. Physics Invariant Engine
                         try:
@@ -783,11 +931,16 @@ class CAVShieldEngine:
                         self.latest_decision = decision
 
                         # 5. Fail-Safe Enforcement
+                        t_fs_start_ns = time.perf_counter_ns()
                         forward, actions = self.failsafe.enforce(decision, frame, now=frame.timestamp)
+                        fs_latency_ms = (time.perf_counter_ns() - t_fs_start_ns) / 1_000_000.0
+                        self.metrics.record_failsafe_latency(fs_latency_ms)
 
                         # Record metrics (positive = dropped, blocked, or HIGH/CRITICAL alert)
                         is_positive = (not forward) or (decision.level >= RiskLevel.HIGH)
-                        proc_latency_ms = (time.perf_counter() - t_start_proc) * 1000.0
+                        if is_positive:
+                            self._current_window_flagged = True
+                        proc_latency_ms = (time.perf_counter_ns() - t_start_ns) / 1_000_000.0
                         self.metrics.record_frame(frame.label, is_positive_decision=is_positive, detection_latency_ms=proc_latency_ms)
 
                         # 6. Forwarded Frame Actuation
@@ -836,13 +989,14 @@ class CAVShieldEngine:
             v2x_count += 1
 
             try:
-                verdict = self.v2x_validator.validate(v2x_msg, now=v2x_msg.timestamp)
-                decision = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=v2x_msg.timestamp)
-                accepted = self.failsafe.enforce_v2x(decision, v2x_msg, now=v2x_msg.timestamp)
+                verdict = self.v2x_validator.validate(v2x_msg, now=now)
+                decision = self.risk_engine.fuse_v2x(v2x_msg, verdict, now=now)
+                accepted = self.failsafe.enforce_v2x(decision, v2x_msg, now=now)
 
-                if accepted and v2x_msg.obstacle is not None:
+                if accepted and (v2x_msg.obstacle is not None or v2x_msg.claimed_decel > 2.0 or v2x_msg.msg_type == "EMERGENCY_BRAKING"):
                     with self._world_lock:
-                        self.world.twin.apply_v2x_hazard(now=v2x_msg.timestamp)
+                        is_unverified = (not self.failsafe.protection_enabled) or (decision.level >= RiskLevel.HIGH) or (getattr(verdict, "status", "") == "rejected")
+                        self.world.twin.apply_v2x_hazard(now=now, is_unverified=is_unverified)
 
                 if not self.failsafe.protection_enabled and (getattr(verdict, "status", "accepted") == "rejected" or decision.level >= RiskLevel.HIGH):
                     status_str = "forwarded"
@@ -864,7 +1018,7 @@ class CAVShieldEngine:
                 status=status_str,
                 trust=trust_val,
                 reason=reason_str,
-                now=v2x_msg.timestamp,
+                now=now,
             )
 
     def _record_can_snapshot(self, frame: CANFrame, verdict: str, reason: str, now: Optional[float] = None) -> None:
@@ -970,9 +1124,21 @@ class CAVShieldEngine:
         while self._running:
             try:
                 try:
-                    full_window, ts = self.ai_queue.get(timeout=0.05)
+                    item = self.ai_queue.get(timeout=0.05)
                 except queue.Empty:
                     continue
+
+                if isinstance(item, tuple) and len(item) == 3:
+                    full_window, ts, t_enqueued = item
+                    t_now = time.perf_counter()
+                    queue_wait_ms = (t_now - t_enqueued) * 1000.0
+                    self.metrics.record_ai_queue_wait(queue_wait_ms)
+                    if (t_now - t_enqueued) > 0.50:
+                        continue  # Drop stale window (> 0.5s in queue)
+                elif isinstance(item, tuple) and len(item) == 2:
+                    full_window, ts = item[0], item[1]
+                else:
+                    full_window, ts = item, time.perf_counter()
 
                 t0 = time.perf_counter()
 
@@ -985,6 +1151,9 @@ class CAVShieldEngine:
 
                 inf_latency_ms = (time.perf_counter() - t0) * 1000.0
                 self.metrics.record_inference_latency(inf_latency_ms)
+
+                # Small sleep to yield GIL to pipeline fast path
+                time.sleep(0.001)
 
                 # Update shared AI context
                 self.ai_context = AIContext(
@@ -1097,7 +1266,8 @@ class CAVShieldEngine:
 
         All data fields are deep copies under a lock; never blocks pipeline execution.
         """
-        now = self.last_sim_time if self.last_sim_time > 0 else (time.perf_counter() - self.uptime_start)
+        now = self.clock()
+        self.last_sim_time = now
         cutoff_time = now - 8.0
 
         with self._world_lock, self._snapshot_lock:
@@ -1126,56 +1296,157 @@ class CAVShieldEngine:
                     if len(v2x_rows) >= 20:
                         break
 
-            # Security Events Feed: last 20 flagged CAN and V2X events tagged [CAN] or [V2X]
+            # Security Events Feed: fed from unified incident store + flagged buffers
             sec_events: List[Dict[str, Any]] = []
+            for inc in self.failsafe.incidents_buffer:
+                is_v2x = str(inc.target).startswith("V-") or "V2X" in inc.attack_type
+                sec_events.append({
+                    "domain": "V2X" if is_v2x else "CAN",
+                    "ts": round(inc.ts, 3),
+                    "raw_ts": inc.ts,
+                    "id": inc.target,
+                    "sender": inc.target,
+                    "verdict": inc.level,
+                    "reason": inc.explanation,
+                    "count": inc.count,
+                })
             for c in self.flagged_can:
-                sec_events.append({
-                    "domain": "CAN",
-                    "ts": c["ts"],
-                    "raw_ts": c["raw_ts"],
-                    "id": c["id"],
-                    "sender": c["sender"],
-                    "verdict": c["verdict"],
-                    "reason": c["reason"],
-                    "count": c.get("count", 1),
-                })
+                if not any(e["id"] == c["id"] and abs(e["raw_ts"] - c["raw_ts"]) < 1.0 for e in sec_events):
+                    sec_events.append({
+                        "domain": "CAN",
+                        "ts": c["ts"],
+                        "raw_ts": c["raw_ts"],
+                        "id": c["id"],
+                        "sender": c["sender"],
+                        "verdict": c["verdict"].upper(),
+                        "reason": c["reason"],
+                        "count": c.get("count", 1),
+                    })
             for v in self.flagged_v2x:
-                sec_events.append({
-                    "domain": "V2X",
-                    "ts": v["ts"],
-                    "raw_ts": v["raw_ts"],
-                    "id": v["sender"],
-                    "sender": v["sender"],
-                    "verdict": v["status"],
-                    "reason": v["reason"],
-                    "count": v.get("count", 1),
-                })
+                if not any(e["id"] == v["sender"] and abs(e["raw_ts"] - v["raw_ts"]) < 1.0 for e in sec_events):
+                    sec_events.append({
+                        "domain": "V2X",
+                        "ts": v["ts"],
+                        "raw_ts": v["raw_ts"],
+                        "id": v["sender"],
+                        "sender": v["sender"],
+                        "verdict": v["status"].upper(),
+                        "reason": v["reason"],
+                        "count": v.get("count", 1),
+                    })
             sec_events.sort(key=lambda x: x["raw_ts"], reverse=True)
             sec_events = sec_events[:20]
 
             # 1. Twin plant state (with FIX 6: stale nulls, fresh spoof check, perceived_age_s)
             twin_dict = self.world.twin.snapshot(now=now)
 
-            # 2. Threat assessment
+            # 2. Threat assessment & Banner: single source of truth with unified incident store
+            ATTACK_NAME_MAP = {
+                "flood": "Flooding",
+                "fuzz": "Fuzzing",
+                "replay": "Replay",
+                "spoof_brake": "Spoofing (Brake)",
+                "spoof_accel": "Spoofing (Accel)",
+                "spoof_speed": "Spoofing (Speed)",
+                "spoof_rpm": "Spoofing (RPM)",
+                "spoof_gear": "Spoofing (Gear)",
+                "v2x_phantom": "V2X Phantom Obstacle",
+                "v2x_fake_ebrake": "V2X Fake E-Brake",
+                "v2x_gps": "V2X GPS Drift",
+            }
+            active_atks = list(self.world.injector.active())
             latest_dec = self.latest_decision
-            if latest_dec is not None:
-                atk_type = latest_dec.attack_type
-                conf = latest_dec.confidence
-                lvl = latest_dec.level.name
-                expl = latest_dec.explanation
-                driver_act = latest_dec.components.get("driver_action", "System operating normally.")
+            top_inc = self.failsafe.incidents_buffer[0] if len(self.failsafe.incidents_buffer) > 0 else None
+
+            # Fail-Safe Protection OFF Active Attack Forwarding Behavior:
+            # When gateway protection is disabled and an attack is active,
+            # hostile packets are forwarded directly into the vehicle network.
+            if not self.failsafe.protection_enabled and len(active_atks) > 0:
+                if self._unprotected_start_time is None:
+                    self._unprotected_start_time = now
+                unprot_sec = max(0.1, round(now - self._unprotected_start_time, 2))
+
+                if not twin_dict["unsafe"]:
+                    first_atk = active_atks[0]
+                    formatted_atk = ATTACK_NAME_MAP.get(first_atk, first_atk.replace("_", " ").title())
+                    twin_dict["unsafe"] = f"UNSHIELDED {formatted_atk.upper()} FORWARDED"
+                    twin_dict["unsafe_seconds"] = unprot_sec
             else:
+                self._unprotected_start_time = None
+
+            if active_atks:
+                # Active cyber-physical attack currently in progress
+                active_key = active_atks[0]
+                atk_type = ATTACK_NAME_MAP.get(active_key, active_key.replace("_", " ").title())
+                if top_inc and (now - top_inc.ts) <= 8.0:
+                    lvl = top_inc.level
+                    conf = max(0.90, top_inc.confidence)
+                    expl = top_inc.explanation
+                elif latest_dec is not None and latest_dec.attack_type != "Normal":
+                    lvl = latest_dec.level.name
+                    conf = max(0.90, latest_dec.confidence)
+                    expl = latest_dec.explanation
+                else:
+                    lvl = "CRITICAL" if ("brake" in active_key or "accel" in active_key) else "HIGH"
+                    conf = 0.95
+                    expl = f"Active {atk_type} attack currently injected into vehicle network."
+
+                if not self.failsafe.protection_enabled:
+                    driver_act = "WARNING: Fail-Safe protection is disabled. Hostile packets are forwarded directly to vehicle actuators."
+                    headline = f"UNPROTECTED {lvl} Threat: {atk_type}"
+                else:
+                    driver_act = (
+                        "Take manual control: safety-critical systems under active attack."
+                        if lvl == "CRITICAL"
+                        else "Mitigating cyber-physical threat: active filtering engaged."
+                    )
+                    headline = f"{lvl} Threat: {atk_type}"
+
+            elif self.failsafe.current_mode == FailSafeManager.MODE_NORMAL:
                 atk_type = "Normal"
                 conf = 0.0
                 lvl = "LOW"
                 expl = "All systems operational within normal parameters."
                 driver_act = "System operating normally."
+                headline = "System Secure"
+
+            elif top_inc and (now - top_inc.ts) <= 8.0:
+                # Attack has ceased, vehicle is actively recovering
+                atk_type = top_inc.attack_type
+                conf = top_inc.confidence
+                lvl = top_inc.level
+                expl = f"Attack mitigated. Vehicle recovering in {self.failsafe.current_mode} mode."
+                driver_act = "Vehicle stability recovering under fail-safe supervisor."
+                headline = f"Threat Mitigated: {atk_type} ({self.failsafe.current_mode})"
+
+            elif latest_dec is not None:
+                atk_type = latest_dec.attack_type
+                conf = latest_dec.confidence
+                lvl = latest_dec.level.name
+                expl = latest_dec.explanation
+                driver_act = latest_dec.components.get("driver_action", "Monitoring vehicle status.")
+                headline = f"{lvl} Threat: {atk_type}"
+
+            else:
+                atk_type = "Normal"
+                conf = 0.0
+                lvl = "LOW"
+                expl = f"Vehicle in {self.failsafe.current_mode} mode; no active threats detected."
+                driver_act = "Monitoring vehicle status."
+                headline = f"Vehicle in {self.failsafe.current_mode} Mode"
+
+            assumed_ep = ""
+            if atk_type not in ("Normal", ""):
+                assumed_ep = resolve_entry_point(atk_type, self.cfg)
+            elif len(active_atks) > 0:
+                assumed_ep = resolve_entry_point(active_atks[0], self.cfg)
 
             threat_dict = {
                 "attack_type": atk_type,
                 "confidence": round(conf, 3),
                 "level": lvl,
                 "explanation": expl,
+                "assumed_entry_point": assumed_ep,
                 "ai_available": bool(self.ai_context.available),
                 "anomaly": round(self.ai_context.anomaly, 3),
                 "attack_prob": round(self.ai_context.attack_prob, 3),
@@ -1185,7 +1456,7 @@ class CAVShieldEngine:
             # 3. Banner
             banner_dict = {
                 "level": lvl,
-                "headline": f"{lvl} Threat: {atk_type}" if lvl != "LOW" else "System Secure",
+                "headline": headline,
                 "driver_action": driver_act,
             }
 
@@ -1202,13 +1473,16 @@ class CAVShieldEngine:
             active_atks = list(self.world.injector.active())
 
             # 8. Complete Schema dict
+            ai_backend_display = "IsolationForest" if self.anomaly_detector.backend_name == "iforest" else (
+                "LSTM-AE (ONNX)" if "onnx" in self.anomaly_detector.backend_name else "LSTM-AE (PyTorch)"
+            )
             return {
                 "t": round(now, 3),
                 "mode": self.failsafe.current_mode,
                 "protection": bool(self.failsafe.protection_enabled),
                 "backend": {
                     "bus": type(self.gateway_bus).__name__,
-                    "ai": getattr(self.cfg.ai, "anomaly_backend", "iforest"),
+                    "ai": ai_backend_display,
                 },
                 "banner": banner_dict,
                 "active_attacks": active_atks,

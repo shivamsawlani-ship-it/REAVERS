@@ -119,6 +119,8 @@
     explanationBox: document.getElementById("explanationBox"),
     explanationTitle: document.getElementById("explanationTitle"),
     explanationBody: document.getElementById("explanationBody"),
+    explanationEntryPoint: document.getElementById("explanationEntryPoint"),
+    explanationEntryPointVal: document.getElementById("explanationEntryPointVal"),
 
     // Fail-Safe Status
     failsafeIncidentCount: document.getElementById("failsafeIncidentCount"),
@@ -431,7 +433,10 @@
         dom.twinSpeedSub.textContent = `Cluster: ${pSpeedStr} km/h (True: ${speed} km/h)`;
       }
     } else {
-      dom.twinSpeedSub.textContent = `Cluster: -- (stale) | True: ${speed} km/h`;
+      const pAge = twin.perceived_age_s && twin.perceived_age_s.speed_kmh != null
+        ? `${twin.perceived_age_s.speed_kmh.toFixed(1)}s`
+        : ">1.0s";
+      dom.twinSpeedSub.textContent = `Cluster: - (${pAge} old) | True: ${speed} km/h`;
     }
 
     // RPM
@@ -460,7 +465,7 @@
     dom.twinGear.textContent = gearStr;
     dom.twinGearSub.textContent = gearStr === "R" ? "Reverse Gear" : "Drive (Gear 3)";
 
-    // Vehicle Safety Condition
+    // Vehicle Safety Condition (per episode; SAFE card never shows cumulative unsafe time)
     const isUnsafe = twin.unsafe && twin.unsafe.trim() !== "";
     const unsafeSec = twin.unsafe_seconds != null ? twin.unsafe_seconds.toFixed(1) : "0.0";
 
@@ -471,7 +476,7 @@
     } else {
       dom.twinSafetyCard.className = "twin-card safety-card safe";
       dom.twinSafetyVal.textContent = "SAFE";
-      dom.twinSafetySub.textContent = `${unsafeSec}s cumulative unsafe`;
+      dom.twinSafetySub.textContent = "Nominal Dynamics";
     }
   }
 
@@ -510,40 +515,52 @@
         dom.explanationTitle.textContent = "All clear: no inconsistencies found";
       }
       dom.explanationBody.textContent = threat.explanation || "All signals within verified invariants.";
+
+      // Assumed Entry Point line (muted style to avoid confusing with detection result)
+      if (dom.explanationEntryPoint && dom.explanationEntryPointVal) {
+        if (threat.assumed_entry_point && level !== "LOW" && threat.attack_type !== "Normal") {
+          dom.explanationEntryPoint.style.display = "block";
+          dom.explanationEntryPointVal.textContent = threat.assumed_entry_point;
+        } else {
+          dom.explanationEntryPoint.style.display = "none";
+        }
+      }
     }
 
-    // Chart: Limit Plotly updates to at most 2 times/sec
+    // Chart: Update real-time chart (at most 4 times/sec for high smoothness)
     const now = performance.now();
-    if (now - state.lastChartRenderTime < 500) return;
+    if (now - state.lastChartRenderTime < 250) return;
     state.lastChartRenderTime = now;
-
-    if (typeof Plotly === "undefined") return;
 
     const rawScores = snap.scores || [];
     const tVals = [];
     const anomVals = [];
     const atkProbVals = [];
 
-    // Downsample to at most 200 points
-    if (rawScores.length > 200) {
-      const step = rawScores.length / 200;
-      for (let i = 0; i < 200; i++) {
-        const pt = rawScores[Math.floor(i * step)];
-        tVals.push(pt.t);
-        anomVals.push(pt.anomaly);
-        atkProbVals.push(pt.attack_prob);
-      }
-    } else {
-      rawScores.forEach((pt) => {
-        tVals.push(pt.t);
-        anomVals.push(pt.anomaly);
-        atkProbVals.push(pt.attack_prob);
-      });
-    }
+    // Keep the most recent 250 points for continuous smooth streaming
+    const pts = rawScores.length > 250 ? rawScores.slice(-250) : rawScores;
+    pts.forEach((pt) => {
+      tVals.push(pt.t);
+      anomVals.push(pt.anomaly);
+      atkProbVals.push(pt.attack_prob);
+    });
 
-    const currentT = tVals.length > 0 ? tVals[tVals.length - 1] : 0;
+    const currentT = tVals.length > 0 ? tVals[tVals.length - 1] : (snap.t != null ? snap.t : 0);
     const xMin = Math.max(0, currentT - 30);
     const xMax = Math.max(30, currentT);
+
+    // If Plotly library is not loaded, use high-performance Canvas fallback
+    if (typeof Plotly === "undefined") {
+      renderCanvasFallback(tVals, anomVals, atkProbVals, xMin, xMax, snap.attack_markers || []);
+      return;
+    }
+
+    // Clean up fallback canvas if Plotly became available
+    const fallbackCanvas = document.getElementById("threatCanvasFallback");
+    if (fallbackCanvas) {
+      fallbackCanvas.remove();
+      state.plotlyInitialized = false;
+    }
 
     const traces = [
       {
@@ -597,7 +614,8 @@
       paper_bgcolor: "transparent",
       plot_bgcolor: "rgba(15, 22, 35, 0.6)",
       showlegend: false,
-      uirevision: "constant",
+      datarevision: now,
+      uirevision: false,
       xaxis: {
         range: [xMin, xMax],
         color: "#64748b",
@@ -626,6 +644,128 @@
     }
   }
 
+  // High-performance canvas fallback chart when Plotly is offline/unavailable
+  function renderCanvasFallback(tVals, anomVals, atkProbVals, xMin, xMax, markers) {
+    const container = document.getElementById("threatPlotly");
+    if (!container) return;
+    let canvas = document.getElementById("threatCanvasFallback");
+    if (!canvas) {
+      container.innerHTML = "";
+      canvas = document.createElement("canvas");
+      canvas.id = "threatCanvasFallback";
+      canvas.style.width = "100%";
+      canvas.style.height = "220px";
+      canvas.style.display = "block";
+      container.appendChild(canvas);
+    }
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.floor(rect.width || container.clientWidth || 600);
+    const h = 220;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+
+    // Background
+    ctx.fillStyle = "rgba(15, 22, 35, 0.6)";
+    ctx.fillRect(0, 0, w, h);
+
+    const padL = 36, padR = 12, padT = 12, padB = 26;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    // Grid lines and Y-axis scale
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineWidth = 1;
+    const ticks = [0, 0.25, 0.5, 0.75, 1.0];
+    for (let i = 0; i < ticks.length; i++) {
+      const frac = ticks[i];
+      const y = padT + plotH * (1 - frac);
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(w - padR, y);
+      ctx.stroke();
+
+      ctx.fillStyle = "#64748b";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(frac.toFixed(2), padL - 4, y + 3);
+    }
+
+    // Threshold line at 0.50
+    const yThresh = padT + plotH * 0.5;
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "#ef4444";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(padL, yThresh);
+    ctx.lineTo(w - padR, yThresh);
+    ctx.stroke();
+    ctx.restore();
+
+    // Mapping formulas
+    const span = Math.max(0.1, xMax - xMin);
+    const getX = (t) => padL + ((t - xMin) / span) * plotW;
+    const getY = (val) => padT + (1 - Math.max(0, Math.min(1, val))) * plotH;
+
+    // Attack markers
+    if (markers && markers.length > 0) {
+      ctx.strokeStyle = "rgba(239, 68, 68, 0.4)";
+      ctx.lineWidth = 1;
+      markers.forEach((m) => {
+        if (m >= xMin && m <= xMax) {
+          const mx = getX(m);
+          ctx.beginPath();
+          ctx.moveTo(mx, padT);
+          ctx.lineTo(mx, padT + plotH);
+          ctx.stroke();
+        }
+      });
+    }
+
+    // X-axis labels
+    ctx.fillStyle = "#64748b";
+    ctx.font = "9px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(`${xMin.toFixed(0)}s`, padL, h - 8);
+    ctx.fillText(`${((xMin + xMax) / 2).toFixed(0)}s`, padL + plotW / 2, h - 8);
+    ctx.fillText(`${xMax.toFixed(0)}s`, w - padR, h - 8);
+
+    if (tVals.length > 1) {
+      // Draw Attack Prob (dashed amber)
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < tVals.length; i++) {
+        const x = getX(tVals[i]);
+        const y = getY(atkProbVals[i]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // Draw Anomaly Score (cyan solid)
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < tVals.length; i++) {
+        const x = getX(tVals[i]);
+        const y = getY(anomVals[i]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }
+
   // 5. FailSafe Gateway Status & Incidents Table
   function renderFailSafe(snap) {
     const fs = snap.failsafe || {};
@@ -636,11 +776,27 @@
       // Incident Counter
       dom.failsafeIncidentCount.textContent = `Incidents: ${fs.incident_id || 0}`;
 
-      // Blocked Commands
+      // Blocked Commands (shows ID, command name, and count; with protection OFF says 'would block')
       const rejCmds = fs.rejected_commands || {};
       const rejKeys = Object.keys(rejCmds);
+      const cmdNameMap = {
+        "512": "0x200 brake command",
+        "0x200": "0x200 brake command",
+        "513": "0x201 accel command",
+        "0x201": "0x201 accel command",
+        "260": "0x104 gear command",
+        "0x104": "0x104 gear command",
+        "768": "0x300 steering command",
+        "0x300": "0x300 steering command",
+      };
       if (rejKeys.length > 0) {
-        dom.statRejectedCommands.textContent = rejKeys.map((k) => `${k}: ${rejCmds[k]}`).join(", ");
+        const verb = snap.protection ? "blocked" : "would block";
+        dom.statRejectedCommands.textContent = rejKeys
+          .map((k) => {
+            const name = cmdNameMap[k] || `0x${parseInt(k, 10).toString(16).toUpperCase()}`;
+            return `${name}: ${rejCmds[k]} ${verb}`;
+          })
+          .join(", ");
         dom.statRejectedCommands.style.color = "var(--col-safemode)";
       } else {
         dom.statRejectedCommands.textContent = "None";
@@ -690,7 +846,22 @@
         lvlTd.appendChild(lvlPill);
         tr.appendChild(lvlTd);
 
-        tr.appendChild(createTextEl("td", inc.attack_type || "Unknown"));
+        // Attack Type with simulated entry point attribution line
+        const atkTd = document.createElement("td");
+        atkTd.appendChild(createTextEl("div", inc.attack_type || "Unknown", "atk-title"));
+        if (inc.assumed_entry_point) {
+          const epLine = createTextEl(
+            "div",
+            `Assumed entry point (simulated scenario, not detected): ${inc.assumed_entry_point}`,
+            "entry-point-muted"
+          );
+          epLine.style.fontSize = "0.74rem";
+          epLine.style.color = "var(--col-text-muted, #94a3b8)";
+          epLine.style.fontStyle = "italic";
+          epLine.style.marginTop = "2px";
+          atkTd.appendChild(epLine);
+        }
+        tr.appendChild(atkTd);
         tr.appendChild(createTextEl("td", inc.target || "-"));
         tr.appendChild(createTextEl("td", inc.confidence != null ? `${(inc.confidence * 100).toFixed(0)}%` : "-"));
         tr.appendChild(createTextEl("td", inc.latency_ms != null ? `${inc.latency_ms.toFixed(1)}ms` : "-"));
@@ -882,20 +1053,65 @@
     dom.metricF1.textContent = fmtNum(m.f1);
     dom.metricFpr.textContent = fmtPct(m.fpr);
 
-    // Latencies: mean / p95
+    // Latencies: mean / p95 (measured honestly; never 0.00, dash if unmeasured)
     if (m.detection_latency_ms) {
-      dom.metricDetLat.textContent = `${m.detection_latency_ms.mean.toFixed(2)} ms`;
-      dom.metricDetLatSub.textContent = `p95: ${m.detection_latency_ms.p95.toFixed(2)} ms | Max: ${m.detection_latency_ms.max.toFixed(1)} ms`;
+      const mean = m.detection_latency_ms.mean;
+      const p95 = m.detection_latency_ms.p95;
+      if (mean > 0 || p95 > 0) {
+        if (mean < 0.10) {
+          const meanUs = (mean * 1000.0).toFixed(0);
+          const p95Us = (p95 * 1000.0).toFixed(0);
+          dom.metricDetLat.textContent = `${meanUs} µs`;
+          dom.metricDetLatSub.textContent = `p95: ${p95Us} µs | Per-frame`;
+        } else {
+          dom.metricDetLat.textContent = `${mean.toFixed(2)} ms`;
+          dom.metricDetLatSub.textContent = `p95: ${p95.toFixed(2)} ms | Per-frame`;
+        }
+      } else {
+        dom.metricDetLat.textContent = "-";
+        dom.metricDetLatSub.textContent = "p95: -";
+      }
+    } else {
+      dom.metricDetLat.textContent = "-";
+      dom.metricDetLatSub.textContent = "p95: -";
     }
 
     if (m.failsafe_latency_ms) {
-      dom.metricFsLat.textContent = `${m.failsafe_latency_ms.mean.toFixed(2)} ms`;
-      dom.metricFsLatSub.textContent = `p95: ${m.failsafe_latency_ms.p95.toFixed(2)} ms`;
+      const mean = m.failsafe_latency_ms.mean;
+      const p95 = m.failsafe_latency_ms.p95;
+      if (mean > 0 || p95 > 0) {
+        if (mean < 0.10) {
+          const meanUs = (mean * 1000.0).toFixed(0);
+          const p95Us = (p95 * 1000.0).toFixed(0);
+          dom.metricFsLat.textContent = `${meanUs} µs`;
+          dom.metricFsLatSub.textContent = `p95: ${p95Us} µs | Fast-path`;
+        } else {
+          dom.metricFsLat.textContent = `${mean.toFixed(2)} ms`;
+          dom.metricFsLatSub.textContent = `p95: ${p95.toFixed(2)} ms`;
+        }
+      } else {
+        dom.metricFsLat.textContent = "-";
+        dom.metricFsLatSub.textContent = "p95: -";
+      }
+    } else {
+      dom.metricFsLat.textContent = "-";
+      dom.metricFsLatSub.textContent = "p95: -";
     }
 
     if (m.inference_ms) {
-      dom.metricInfLat.textContent = `${m.inference_ms.mean.toFixed(1)} ms`;
-      dom.metricInfLatSub.textContent = `p95: ${m.inference_ms.p95.toFixed(1)} ms`;
+      const infMean = m.inference_ms.mean != null && m.inference_ms.mean > 0 ? `${m.inference_ms.mean.toFixed(1)} ms` : "-";
+      const infP95 = m.inference_ms.p95 != null && m.inference_ms.p95 > 0 ? `${m.inference_ms.p95.toFixed(1)} ms` : "-";
+      dom.metricInfLat.textContent = infMean;
+
+      // Report AI queue wait separately from model inference time
+      if (m.ai_queue_wait_ms && m.ai_queue_wait_ms.mean != null && m.ai_queue_wait_ms.mean > 0) {
+        dom.metricInfLatSub.textContent = `p95: ${infP95} | Delay: ${m.ai_queue_wait_ms.mean.toFixed(1)} ms`;
+      } else {
+        dom.metricInfLatSub.textContent = `p95: ${infP95} | Async window`;
+      }
+    } else {
+      dom.metricInfLat.textContent = "-";
+      dom.metricInfLatSub.textContent = "p95: -";
     }
   }
 
